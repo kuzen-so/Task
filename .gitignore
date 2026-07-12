@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift / Xcode
+.build/
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# App bundles / installers
+*.app
+*.dmg
+*.pkg
+
+# Icons generated during build
+Assets/AppIcon.icns
+Assets/statusbar_icon.png
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
