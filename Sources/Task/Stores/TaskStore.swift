@@ -51,7 +51,7 @@ final class TaskStore: ObservableObject {
             }
         }
 
-        tasks.append(task)
+        tasks.insert(task, at: 0)
         setActive(task)
         save()
     }

@@ -157,46 +157,52 @@ struct FloatingIslandView: View {
     }
 
     private var taskList: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 6) {
+        GeometryReader { geometry in
+            ScrollView(.vertical, showsIndicators: false) {
                 let activeTasks = store.activeTasks
-
-                if activeTasks.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(activeTasks) { task in
-                        IslandTaskRow(
-                            task: task,
-                            isActive: task.isActive,
-                            onToggle: { store.complete(task) },
-                            onActivate: { onSelectTask(task) },
-                            onDelete: { store.delete(task) }
-                        )
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                VStack(spacing: 6) {
+                    if activeTasks.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(activeTasks) { task in
+                            IslandTaskRow(
+                                task: task,
+                                isActive: task.isActive,
+                                onToggle: { store.complete(task) },
+                                onActivate: { onSelectTask(task) },
+                                onDelete: { store.delete(task) }
+                            )
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
                 }
+                .frame(minHeight: activeTasks.isEmpty ? geometry.size.height : nil, alignment: .top)
             }
-            .padding(.vertical, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checklist")
-                .font(.system(size: 28, weight: .medium))
-                .foregroundColor(IslandStyles.secondaryText)
+        VStack(spacing: 0) {
+            Spacer()
 
-            Text("还没有任务")
-                .font(IslandStyles.bodyFont(size: 14, weight: .medium))
-                .foregroundColor(IslandStyles.secondaryText)
+            VStack(spacing: 10) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundColor(IslandStyles.secondaryText)
 
-            Text("在下方输入新任务")
-                .font(IslandStyles.bodyFont(size: 11, weight: .regular))
-                .foregroundColor(IslandStyles.tertiaryText)
+                Text("还没有任务")
+                    .font(IslandStyles.bodyFont(size: 14, weight: .medium))
+                    .foregroundColor(IslandStyles.secondaryText)
+
+                Text("在下方输入新任务")
+                    .font(IslandStyles.bodyFont(size: 11, weight: .regular))
+                    .foregroundColor(IslandStyles.tertiaryText)
+            }
+
+            Spacer()
         }
-        .frame(maxWidth: .infinity, minHeight: Constants.Island.emptyStateHeight)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var newTaskArea: some View {

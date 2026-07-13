@@ -6,6 +6,9 @@ struct SettingsView: View {
     @StateObject private var launchManager = LaunchAtLoginManager.shared
     @State private var isOn: Bool = false
 
+    @AppStorage("taskHighlightStyle") private var highlightStyle: TaskHighlightStyle = .leftBar
+    @AppStorage("taskCheckboxStyle") private var checkboxStyle: TaskCheckboxStyle = .circle
+
     var body: some View {
         Form {
             Section(header: Text("通用").font(.headline)) {
@@ -18,6 +21,22 @@ struct SettingsView: View {
                             }
                         }
                     }
+            }
+            .padding(.vertical, 8)
+
+            Section(header: Text("任务外观").font(.headline)) {
+                Picker("高亮样式", selection: $highlightStyle) {
+                    ForEach(TaskHighlightStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+
+                Picker("复选框样式", selection: $checkboxStyle) {
+                    ForEach(TaskCheckboxStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
             .padding(.vertical, 8)
 
@@ -87,7 +106,7 @@ struct SettingsView: View {
                 HStack {
                     Text("版本")
                     Spacer()
-                    Text("1.1.1")
+                    Text("1.2.0")
                         .foregroundColor(.secondary)
                 }
             }
@@ -103,7 +122,7 @@ struct SettingsView: View {
             .padding(.vertical, 8)
         }
         .padding()
-        .frame(width: 320, height: 300)
+        .frame(width: 340, height: 460)
         .onAppear {
             isOn = launchManager.isEnabled
         }
