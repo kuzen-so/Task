@@ -36,9 +36,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -47,6 +47,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <true/>
     <key>NSCalendarsUsageDescription</key>
     <string>Task 需要访问日历，以便在灵动岛显示日程和重复事件。拒绝时仍可本地使用任务功能。</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Task 需要控制「提醒事项」App，以便将本地任务同步到系统提醒事项。拒绝时仍可本地使用任务功能。</string>
 </dict>
 </plist>
 EOF
@@ -105,6 +107,15 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "${CERT_NAME}"
 else
     echo "   ⚠️ 退回 ad-hoc 签名"
     codesign --force --deep --sign - "${APP_BUNDLE}" 2>/dev/null || true
+fi
+
+# 验证签名与 Gatekeeper 评估
+echo "🔍 Verifying code signature..."
+if codesign --verify --verbose "${APP_BUNDLE}" 2>/dev/null; then
+    echo "   ✅ 签名验证通过"
+else
+    echo "   ⚠️ 签名验证失败：开机自启动（LaunchAgent）可能因 Gatekeeper 阻止而无法启动"
+    echo "      请运行：xattr -dr com.apple.quarantine '/Applications/${APP_NAME}.app'"
 fi
 
 echo "💿 Creating DMG installer..."

@@ -34,17 +34,26 @@ final class LaunchAtLoginManager: ObservableObject {
     }
 
     private func enable() async {
+        guard let executableURL = Bundle.main.executableURL else {
+            print("Failed to enable launch at login: cannot determine executable path")
+            return
+        }
+
         let plist: [String: Any] = [
             "Label": label,
             "ProgramArguments": [
-                "/Applications/Task.app/Contents/MacOS/Task"
+                executableURL.path
             ],
+            "WorkingDirectory": executableURL.deletingLastPathComponent().path,
             "RunAtLoad": true,
-            "KeepAlive": false
+            "KeepAlive": false,
+            "StandardOutPath": logFileURL(pathComponent: "launch.out.log").path,
+            "StandardErrorPath": logFileURL(pathComponent: "launch.err.log").path
         ]
 
         do {
             try FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: logFileURL(pathComponent: "").deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             try data.write(to: plistURL, options: .atomic)
 
@@ -90,5 +99,12 @@ final class LaunchAtLoginManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private nonisolated func logFileURL(pathComponent: String) -> URL {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent("com.kuzen.task", isDirectory: true)
+            .appendingPathComponent(pathComponent)
     }
 }

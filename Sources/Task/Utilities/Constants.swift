@@ -30,6 +30,7 @@ enum Constants {
         static let emptyStateHeight: CGFloat = 120
         static let maxListHeight: CGFloat = 260
         static let minExpandedHeight: CGFloat = 320
+        static let fixedExpandedHeight: CGFloat = 420
 
         enum Shadow {
             static let tightRadius: CGFloat = 8

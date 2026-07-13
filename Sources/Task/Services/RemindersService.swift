@@ -12,7 +12,16 @@ final class RemindersService: ObservableObject {
     private let bundleID = "com.kuzen.task"
 
     init() {
-        updateAuthorizationStatus()
+        // 不在 init 中执行 AppleScript；登录启动时 Reminders.app 可能尚未就绪，
+        // 立即探测会导致阻塞或被系统终止。权限状态留到应用启动完成后再懒加载。
+    }
+
+    /// 应用启动完成且主界面就绪后再调用，避免在登录启动早期访问 Reminders.app。
+    func prepareAfterLaunch() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            updateAuthorizationStatus()
+        }
     }
 
     private nonisolated static func log(_ message: String) {

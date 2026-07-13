@@ -16,19 +16,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventMonitor: EventMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 延迟初始化，避免开机自启时与系统菜单栏竞争导致崩溃
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        // 登录启动时系统窗口服务器/菜单栏可能尚未完全就绪，保守延后；
+        // 普通启动则放到下一个 runloop 即可，避免固定 0.6s 的玄学等待。
+        let isLoginLaunch = Self.isLaunchedByLoginItem()
+        let delay: TimeInterval = isLoginLaunch ? 1.2 : 0
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.performInitialSetup()
         }
     }
 
     private func performInitialSetup() {
         setupServiceConnections()
+        setupSettingsNotification()
+
+        // 分阶段初始化：先状态栏，再浮动窗口。
+        // 若窗口服务器尚未就绪（screens 为空），跳过浮动岛并在屏幕参数变化时重建。
         setupStatusBar()
         setupPopover()
         setupEventMonitor()
         setupFloatingIsland()
-        setupSettingsNotification()
+    }
+
+    /// 通过判断父进程是否为 launchd(1) 来识别是否由 LaunchAgent 开机自启。
+    private nonisolated static func isLaunchedByLoginItem() -> Bool {
+        getppid() == 1
     }
 
     private func setupSettingsNotification() {
@@ -45,8 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         taskStore.onTaskCompleted = { [weak self] task in
             self?.showCelebration(for: task)
         }
-        remindersService.updateAuthorizationStatus()
         calendarService.updateAuthorizationStatus()
+        remindersService.prepareAfterLaunch()
     }
 
     // MARK: - Status Bar

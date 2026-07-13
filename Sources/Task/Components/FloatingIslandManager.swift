@@ -37,8 +37,14 @@ final class FloatingIslandManager: ObservableObject {
 
         isVisible = true
         updateExpandedHeight(animated: false)
-        createFloatingWindow()
-        startMouseMonitor()
+
+        // 登录启动时屏幕可能尚未就绪，若创建失败则稍后由屏幕参数变化通知重建。
+        if targetScreen() == nil {
+            Self.log("setup: no screen available yet, deferring window creation")
+        } else {
+            createFloatingWindow()
+            startMouseMonitor()
+        }
         observeAppState()
         observeScreenChanges()
     }
@@ -83,6 +89,9 @@ final class FloatingIslandManager: ObservableObject {
             Task { @MainActor in
                 self?.performHoverCheck()
             }
+        }
+        if mouseMovedMonitor == nil {
+            Self.log("startMouseMonitor: global monitor returned nil; accessibility permission may be denied")
         }
     }
 
@@ -166,19 +175,8 @@ final class FloatingIslandManager: ObservableObject {
     }
 
     private func updateExpandedHeight(animated: Bool) {
-        guard let store = taskStore else { return }
-
-        let activeCount = store.activeTasks.count
-        let listHeight: CGFloat
-        if activeCount == 0 {
-            listHeight = Constants.Island.emptyStateHeight
-        } else {
-            listHeight = CGFloat(activeCount) * Constants.Island.taskRowHeight + CGFloat(max(activeCount - 1, 0)) * 6 + 12
-        }
-        let clampedListHeight = min(max(listHeight, 0), Constants.Island.maxListHeight)
-
-        let newHeight = Constants.Island.headerHeight + clampedListHeight + Constants.Island.newTaskAreaHeight
-        expandedHeight = max(newHeight, Constants.Island.minExpandedHeight)
+        // 展开高度固定，不再随任务数量变化；任务列表内部滚动。
+        expandedHeight = Constants.Island.fixedExpandedHeight
     }
 
     // MARK: - Window Management
@@ -247,8 +245,22 @@ final class FloatingIslandManager: ObservableObject {
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
         hostingView.layer?.masksToBounds = true
-        window.contentView = hostingView
-        Self.log("hostingView frame=\(hostingView.frame) contentView frame=\(String(describing: window.contentView?.frame))")
+
+        // 用 IslandTrackingView 包裹 hostingView，通过 NSTrackingArea 检测鼠标进出，
+        // 不依赖全局事件监听器（辅助功能权限）。
+        let trackingView = IslandTrackingView(frame: window.contentLayoutRect)
+        trackingView.autoresizingMask = [.width, .height]
+        trackingView.addSubview(hostingView)
+        trackingView.hoverBegan = { [weak self] in
+            self?.cancelPendingCollapse()
+            self?.expand()
+        }
+        trackingView.hoverEnded = { [weak self] in
+            self?.scheduleCollapse()
+        }
+
+        window.contentView = trackingView
+        Self.log("trackingView frame=\(trackingView.frame) hostingView frame=\(hostingView.frame)")
     }
 
     private func focusNewTaskField() {
@@ -300,15 +312,15 @@ final class FloatingIslandManager: ObservableObject {
     }
 
     @objc private func handleScreenChange() {
-        guard isVisible else {
-            floatingWindow?.orderOut(nil)
-            floatingWindow = nil
-            return
-        }
-
         screenChangeWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            self?.rebuildWindow()
+            guard let self = self else { return }
+            if self.floatingWindow == nil, self.isVisible {
+                self.createFloatingWindow()
+                self.startMouseMonitor()
+            } else {
+                self.rebuildWindow()
+            }
         }
         screenChangeWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
@@ -348,4 +360,48 @@ final class FloatingIslandManager: ObservableObject {
 final class FloatingIslandWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+// MARK: - Island Tracking View
+
+/// 包裹 SwiftUI hosting view 并监听鼠标进入/离开，用于触发灵动岛展开/收起。
+/// 使用 NSTrackingArea 比 NSEvent.addGlobalMonitorForEvents 更可靠，不需要辅助功能权限。
+final class IslandTrackingView: NSView {
+    var hoverBegan: (() -> Void)?
+    var hoverEnded: (() -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var isHovering = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea = trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let newTrackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [
+                .mouseEnteredAndExited,
+                .mouseMoved,
+                .activeAlways,
+                .inVisibleRect
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(newTrackingArea)
+        trackingArea = newTrackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard !isHovering else { return }
+        isHovering = true
+        hoverBegan?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard isHovering else { return }
+        isHovering = false
+        hoverEnded?()
+    }
 }

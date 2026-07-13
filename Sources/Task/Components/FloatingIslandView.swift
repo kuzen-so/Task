@@ -178,7 +178,7 @@ struct FloatingIslandView: View {
             }
             .padding(.vertical, 4)
         }
-        .frame(maxHeight: Constants.Island.maxListHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyState: some View {
@@ -196,6 +196,7 @@ struct FloatingIslandView: View {
                 .foregroundColor(IslandStyles.tertiaryText)
         }
         .frame(maxWidth: .infinity, minHeight: Constants.Island.emptyStateHeight)
+        .frame(maxHeight: .infinity)
     }
 
     private var newTaskArea: some View {
