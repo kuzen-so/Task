@@ -106,7 +106,8 @@ final class FloatingIslandManager: ObservableObject {
         guard !isTransitioning, let window = floatingWindow else { return }
 
         let mouseLoc = NSEvent.mouseLocation
-        let checkFrame = currentContentFrame(in: window).insetBy(dx: -24, dy: -16)
+        // 只检测实际内容区域，加一点边距避免边缘过于敏感。
+        let checkFrame = currentContentFrame(in: window).insetBy(dx: -4, dy: -4)
         let inContent = checkFrame.contains(mouseLoc)
 
         if inContent && !isExpanded {
@@ -135,6 +136,14 @@ final class FloatingIslandManager: ObservableObject {
             : NSSize(width: Constants.Island.collapsedWidth, height: Constants.Island.collapsedHeight)
     }
 
+    private var collapsedSize: NSSize {
+        NSSize(width: Constants.Island.collapsedWidth, height: Constants.Island.collapsedHeight)
+    }
+
+    private var expandedSize: NSSize {
+        NSSize(width: Constants.Island.expandedWidth, height: expandedHeight)
+    }
+
     private func scheduleCollapse() {
         guard collapseWorkItem == nil else { return }
         let workItem = DispatchWorkItem { [weak self] in
@@ -156,7 +165,6 @@ final class FloatingIslandManager: ObservableObject {
         guard !isExpanded, !isTransitioning else { return }
         isTransitioning = true
         isExpanded = true
-        floatingWindow?.ignoresMouseEvents = false
         DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
             self?.isTransitioning = false
             self?.floatingWindow?.makeKey()
@@ -168,7 +176,6 @@ final class FloatingIslandManager: ObservableObject {
         guard isExpanded, !isTransitioning else { return }
         isTransitioning = true
         isExpanded = false
-        floatingWindow?.ignoresMouseEvents = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
             self?.isTransitioning = false
         }
@@ -184,9 +191,10 @@ final class FloatingIslandManager: ObservableObject {
     private func createFloatingWindow() {
         guard let screen = targetScreen() else { return }
 
+        // 窗口保持展开大小不变，由 SwiftUI 内容动画实现自然展开/收起，避免窗口 resize 与内容动画不同步导致跳动。
         let windowSize = NSSize(
             width: Constants.Island.expandedWidth,
-            height: Constants.Island.headerHeight + Constants.Island.maxListHeight + Constants.Island.newTaskAreaHeight + 40
+            height: expandedHeight
         )
         let windowFrame = NSRect(origin: .zero, size: windowSize)
 
@@ -203,7 +211,6 @@ final class FloatingIslandManager: ObservableObject {
         window.level = .popUpMenu
         window.collectionBehavior = [.fullScreenAuxiliary, .stationary, .canJoinAllSpaces]
         window.isMovableByWindowBackground = false
-        window.ignoresMouseEvents = true
         window.appearance = NSAppearance(named: .darkAqua)
 
         updateContentView(for: window)
@@ -246,17 +253,13 @@ final class FloatingIslandManager: ObservableObject {
         hostingView.wantsLayer = true
         hostingView.layer?.masksToBounds = true
 
-        // 用 IslandTrackingView 包裹 hostingView，通过 NSTrackingArea 检测鼠标进出，
-        // 不依赖全局事件监听器（辅助功能权限）。
+        // 用 IslandTrackingView 包裹 hostingView，通过 NSTrackingArea 检测鼠标移动/进出。
+        // 实际展开/收起判断由 performHoverCheck 根据内容区域精确计算，避免提前展开。
         let trackingView = IslandTrackingView(frame: window.contentLayoutRect)
         trackingView.autoresizingMask = [.width, .height]
         trackingView.addSubview(hostingView)
-        trackingView.hoverBegan = { [weak self] in
-            self?.cancelPendingCollapse()
-            self?.expand()
-        }
-        trackingView.hoverEnded = { [weak self] in
-            self?.scheduleCollapse()
+        trackingView.hoverChanged = { [weak self] in
+            self?.performHoverCheck()
         }
 
         window.contentView = trackingView
@@ -367,11 +370,9 @@ final class FloatingIslandWindow: NSWindow {
 /// 包裹 SwiftUI hosting view 并监听鼠标进入/离开，用于触发灵动岛展开/收起。
 /// 使用 NSTrackingArea 比 NSEvent.addGlobalMonitorForEvents 更可靠，不需要辅助功能权限。
 final class IslandTrackingView: NSView {
-    var hoverBegan: (() -> Void)?
-    var hoverEnded: (() -> Void)?
+    var hoverChanged: (() -> Void)?
 
     private var trackingArea: NSTrackingArea?
-    private var isHovering = false
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -394,14 +395,14 @@ final class IslandTrackingView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard !isHovering else { return }
-        isHovering = true
-        hoverBegan?()
+        hoverChanged?()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        hoverChanged?()
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard isHovering else { return }
-        isHovering = false
-        hoverEnded?()
+        hoverChanged?()
     }
 }
