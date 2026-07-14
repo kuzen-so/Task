@@ -23,15 +23,11 @@ final class TaskStore: ObservableObject {
 
             if let service = remindersService {
                 remindersServiceCancellable = service.$isAuthorized
-                    .dropFirst()
                     .removeDuplicates()
-                    .receive(on: DispatchQueue.main)
                     .sink { [weak self] isAuthorized in
-                        Task { @MainActor in
-                            self?.updateRemindersSyncTimer()
-                            if isAuthorized {
-                                self?.syncReminders()
-                            }
+                        self?.updateRemindersSyncTimer()
+                        if isAuthorized {
+                            self?.syncReminders()
                         }
                     }
             }
