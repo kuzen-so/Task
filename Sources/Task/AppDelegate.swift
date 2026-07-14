@@ -184,7 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.level = .popUpMenu
             window.center()
-            window.contentViewController = NSHostingController(rootView: SettingsView(calendarService: calendarService))
+            window.contentViewController = NSHostingController(rootView: SettingsView(
+                taskStore: taskStore,
+                remindersService: remindersService,
+                calendarService: calendarService
+            ))
             settingsWindow = window
         }
 

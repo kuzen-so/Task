@@ -1,5 +1,5 @@
 import Foundation
-import Combine
+@preconcurrency import Combine
 
 @MainActor
 final class TaskStore: ObservableObject {
@@ -12,12 +12,46 @@ final class TaskStore: ObservableObject {
     private var saveWorkItem: DispatchWorkItem?
     private var timer: Timer?
 
-    var remindersService: RemindersService?
+    private var remindersSyncTimer: Timer?
+    private var remindersServiceCancellable: AnyCancellable?
+    private var isSyncingReminders = false
+
+    var remindersService: RemindersService? {
+        didSet {
+            remindersServiceCancellable?.cancel()
+            remindersServiceCancellable = nil
+
+            if let service = remindersService {
+                remindersServiceCancellable = service.$isAuthorized
+                    .dropFirst()
+                    .removeDuplicates()
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] isAuthorized in
+                        Task { @MainActor in
+                            self?.updateRemindersSyncTimer()
+                            if isAuthorized {
+                                self?.syncReminders()
+                            }
+                        }
+                    }
+            }
+
+            updateRemindersSyncTimer()
+        }
+    }
     var onTaskCompleted: ((TaskItem) -> Void)?
 
     init() {
         load()
         startTimerIfNeeded()
+        updateRemindersSyncTimer()
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            remindersSyncTimer?.invalidate()
+            remindersServiceCancellable?.cancel()
+        }
     }
 
     // MARK: - CRUD
@@ -130,6 +164,90 @@ final class TaskStore: ObservableObject {
             } catch {
                 print("Failed to import reminders: \(error)")
             }
+        }
+    }
+
+    // MARK: - Reminders Sync
+
+    func updateRemindersSyncTimer() {
+        remindersSyncTimer?.invalidate()
+        remindersSyncTimer = nil
+
+        guard let service = remindersService, service.isAuthorized else { return }
+
+        let isEnabled = UserDefaults.standard.bool(forKey: "remindersAutoSyncEnabled")
+        guard isEnabled else { return }
+
+        let interval = UserDefaults.standard.double(forKey: "remindersSyncIntervalSeconds")
+        let effectiveInterval = interval > 0 ? interval : 60.0
+
+        remindersSyncTimer = Timer.scheduledTimer(withTimeInterval: effectiveInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncReminders()
+            }
+        }
+    }
+
+    func syncReminders() {
+        guard !isSyncingReminders else { return }
+        guard let service = remindersService, service.isAuthorized else { return }
+
+        let isEnabled = UserDefaults.standard.bool(forKey: "remindersAutoSyncEnabled")
+        guard isEnabled else { return }
+
+        isSyncingReminders = true
+
+        Task {
+            defer { isSyncingReminders = false }
+            do {
+                let items = try await service.fetchIncompleteReminders()
+                await MainActor.run {
+                    self.mergeReminders(items)
+                }
+            } catch {
+                print("Failed to sync reminders: \(error)")
+            }
+        }
+    }
+
+    private func mergeReminders(_ items: [ReminderImportItem]) {
+        let fetchedByID = Dictionary(uniqueKeysWithValues: items.map { ($0.identifier, $0) })
+
+        var didChange = false
+
+        // 1. Update or complete local tasks linked to reminders.
+        for index in tasks.indices {
+            guard let reminderID = tasks[index].reminderID else { continue }
+
+            if let item = fetchedByID[reminderID] {
+                if tasks[index].title != item.title {
+                    tasks[index].title = item.title
+                    didChange = true
+                }
+            } else {
+                // Reminder was completed or deleted externally.
+                if !tasks[index].isCompleted {
+                    tasks[index].isCompleted = true
+                    tasks[index].completedAt = Date()
+                    tasks[index].isActive = false
+                    tasks[index].reminderID = nil
+                    didChange = true
+                }
+            }
+        }
+
+        // 2. Import new reminders that are not linked yet.
+        for item in items {
+            guard !item.title.isEmpty else { continue }
+            guard !tasks.contains(where: { $0.reminderID == item.identifier }) else { continue }
+            let task = TaskItem(title: item.title, reminderID: item.identifier)
+            tasks.append(task)
+            didChange = true
+        }
+
+        if didChange {
+            save()
+            startTimerIfNeeded()
         }
     }
 
