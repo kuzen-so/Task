@@ -331,12 +331,22 @@ final class FloatingIslandManager: ObservableObject {
 
     private func rebuildWindow() {
         let wasExpanded = isExpanded
-        floatingWindow?.close()
-        floatingWindow = nil
         isExpanded = false
-        createFloatingWindow()
-        if wasExpanded {
-            expand()
+
+        if let window = floatingWindow {
+            // 复用已有窗口，避免关闭/释放导致的 autorelease 崩溃。
+            updateContentView(for: window)
+            if let screen = targetScreen() {
+                positionWindow(window, on: screen)
+            }
+            if wasExpanded {
+                expand()
+            }
+        } else {
+            createFloatingWindow()
+            if wasExpanded {
+                expand()
+            }
         }
     }
 
@@ -363,6 +373,11 @@ final class FloatingIslandManager: ObservableObject {
 final class FloatingIslandWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        self.isReleasedWhenClosed = false
+    }
 }
 
 // MARK: - Island Tracking View

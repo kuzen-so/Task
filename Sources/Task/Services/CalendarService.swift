@@ -205,23 +205,28 @@ final class CalendarService: ObservableObject {
     }
 
     private func fetchEvents(start: Date, end: Date) async throws -> [CalendarEvent] {
-        let visibleCalendars = eventStore.calendars(for: .event)
-            .filter { !hiddenCalendarNames.contains($0.title) }
+        // EventKit 的 events(matching:) 是同步阻塞 API，放到后台队列执行，
+        // 避免在主线程上长时间占用 CPU（登录启动时尤其敏感）。
+        await Task.detached(priority: .userInitiated) { [hiddenCalendarNames] in
+            let store = EKEventStore()
+            let visibleCalendars = store.calendars(for: .event)
+                .filter { !hiddenCalendarNames.contains($0.title) }
 
-        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: visibleCalendars)
-        let ekEvents = eventStore.events(matching: predicate)
+            let predicate = store.predicateForEvents(withStart: start, end: end, calendars: visibleCalendars)
+            let ekEvents = store.events(matching: predicate)
 
-        return ekEvents.map { event in
-            let uniqueID = "\(event.eventIdentifier ?? UUID().uuidString)|\(event.startDate.timeIntervalSince1970)"
-            return CalendarEvent(
-                id: uniqueID,
-                title: event.title ?? "无标题",
-                startDate: event.startDate,
-                endDate: event.endDate,
-                isAllDay: event.isAllDay,
-                calendarName: event.calendar.title
-            )
-        }
+            return ekEvents.map { event in
+                let uniqueID = "\(event.eventIdentifier ?? UUID().uuidString)|\(event.startDate.timeIntervalSince1970)"
+                return CalendarEvent(
+                    id: uniqueID,
+                    title: event.title ?? "无标题",
+                    startDate: event.startDate,
+                    endDate: event.endDate,
+                    isAllDay: event.isAllDay,
+                    calendarName: event.calendar.title
+                )
+            }
+        }.value
     }
 
     // MARK: - Helpers

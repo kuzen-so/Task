@@ -1,26 +1,53 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 struct SettingsView: View {
     @ObservedObject var calendarService: CalendarService
     @StateObject private var launchManager = LaunchAtLoginManager.shared
-    @State private var isOn: Bool = false
 
     @AppStorage("taskHighlightStyle") private var highlightStyle: TaskHighlightStyle = .leftBar
     @AppStorage("taskCheckboxStyle") private var checkboxStyle: TaskCheckboxStyle = .circle
 
+    private var launchToggleBinding: Binding<Bool> {
+        Binding(
+            get: { launchManager.isEnabled },
+            set: { newValue in
+                launchManager.setEnabled(newValue)
+            }
+        )
+    }
+
     var body: some View {
         Form {
             Section(header: Text("通用").font(.headline)) {
-                Toggle("开机自启动", isOn: $isOn)
-                    .onChange(of: isOn) { newValue in
-                        Task { @MainActor in
-                            if newValue != launchManager.isEnabled {
-                                await launchManager.toggle()
-                                isOn = launchManager.isEnabled
+                Toggle("开机自启动", isOn: launchToggleBinding)
+
+                if launchManager.status == .requiresApproval {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("需要在「系统设置 → 通用 → 登录项」中允许 Task 自动启动。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Button("打开系统设置") {
+                                SMAppService.openSystemSettingsLoginItems()
                             }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
                         }
                     }
+                    .padding(.top, 4)
+                }
+
+                if let error = launchManager.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.top, 4)
+                }
             }
             .padding(.vertical, 8)
 
@@ -123,9 +150,6 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 340, height: 460)
-        .onAppear {
-            isOn = launchManager.isEnabled
-        }
     }
 
     private func showAuthDeniedAlert(for appName: String) {

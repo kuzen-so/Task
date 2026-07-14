@@ -36,9 +36,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.1</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -103,9 +103,11 @@ CNF
 ensure_signing_cert
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "${CERT_NAME}"; then
     echo "   Using certificate: ${CERT_NAME}"
-    codesign --force --deep --sign "${CERT_NAME}" "${APP_BUNDLE}"
+    # 启用 hardened runtime，SMAppService 开机自启在分发场景下需要有效签名。
+    codesign --force --deep --options runtime --sign "${CERT_NAME}" "${APP_BUNDLE}"
 else
     echo "   ⚠️ 退回 ad-hoc 签名"
+    echo "      注意：ad-hoc 签名下 SMAppService 开机自启功能无法工作"
     codesign --force --deep --sign - "${APP_BUNDLE}" 2>/dev/null || true
 fi
 
@@ -114,7 +116,7 @@ echo "🔍 Verifying code signature..."
 if codesign --verify --verbose "${APP_BUNDLE}" 2>/dev/null; then
     echo "   ✅ 签名验证通过"
 else
-    echo "   ⚠️ 签名验证失败：开机自启动（LaunchAgent）可能因 Gatekeeper 阻止而无法启动"
+    echo "   ⚠️ 签名验证失败：SMAppService 开机自启可能因 Gatekeeper 阻止而无法启动"
     echo "      请运行：xattr -dr com.apple.quarantine '/Applications/${APP_NAME}.app'"
 fi
 

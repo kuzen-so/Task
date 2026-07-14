@@ -1,110 +1,77 @@
 import Foundation
+import ServiceManagement
 
 @MainActor
 final class LaunchAtLoginManager: ObservableObject {
     static let shared = LaunchAtLoginManager()
 
-    private let label = "com.kuzen.task.launchatlogin"
-    private let launchAgentsDir: URL = {
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+    private let legacyLabel = "com.kuzen.task.launchatlogin"
+    private let legacyPlistURL: URL = {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+            .first!
             .appendingPathComponent("LaunchAgents", isDirectory: true)
+            .appendingPathComponent("com.kuzen.task.launchatlogin.plist")
     }()
 
-    private var plistURL: URL {
-        launchAgentsDir.appendingPathComponent("\(label).plist")
-    }
+    private let service = SMAppService.mainApp
 
-    @Published private(set) var isEnabled: Bool = false
+    @Published private(set) var status: SMAppService.Status
+    @Published private(set) var lastError: String?
+
+    var isEnabled: Bool {
+        status == .enabled || status == .requiresApproval
+    }
 
     private init() {
-        isEnabled = checkEnabled()
+        status = service.status
+        cleanUpLegacyLaunchAgentIfNeeded()
     }
 
-    func toggle() async {
-        if isEnabled {
-            await disable()
-        } else {
-            await enable()
-        }
-        isEnabled = checkEnabled()
-    }
-
-    private func checkEnabled() -> Bool {
-        FileManager.default.fileExists(atPath: plistURL.path)
-    }
-
-    private func enable() async {
-        guard let executableURL = Bundle.main.executableURL else {
-            print("Failed to enable launch at login: cannot determine executable path")
-            return
-        }
-
-        let plist: [String: Any] = [
-            "Label": label,
-            "ProgramArguments": [
-                executableURL.path
-            ],
-            "WorkingDirectory": executableURL.deletingLastPathComponent().path,
-            "RunAtLoad": true,
-            "KeepAlive": false,
-            "StandardOutPath": logFileURL(pathComponent: "launch.out.log").path,
-            "StandardErrorPath": logFileURL(pathComponent: "launch.err.log").path
-        ]
+    func setEnabled(_ enabled: Bool) {
+        lastError = nil
 
         do {
-            try FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: logFileURL(pathComponent: "").deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-            try data.write(to: plistURL, options: .atomic)
-
-            try await runLaunchctl(arguments: ["load", plistURL.path])
-        } catch {
-            print("Failed to enable launch at login: \(error)")
-        }
-    }
-
-    private func disable() async {
-        do {
-            if FileManager.default.fileExists(atPath: plistURL.path) {
-                try await runLaunchctl(arguments: ["unload", plistURL.path])
-                try FileManager.default.removeItem(at: plistURL)
+            if enabled {
+                try service.register()
+            } else {
+                try service.unregister()
             }
         } catch {
-            print("Failed to disable launch at login: \(error)")
+            lastError = error.localizedDescription
         }
+
+        status = service.status
     }
 
-    private nonisolated func runLaunchctl(arguments: [String]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.launchPath = "/bin/launchctl"
-                process.arguments = arguments
+    // MARK: - Legacy LaunchAgent cleanup
 
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    if process.terminationStatus == 0 {
-                        continuation.resume()
-                    } else {
-                        let error = NSError(
-                            domain: "LaunchAtLogin",
-                            code: Int(process.terminationStatus),
-                            userInfo: [NSLocalizedDescriptionKey: "launchctl exited with status \(process.terminationStatus)"]
-                        )
-                        continuation.resume(throwing: error)
-                    }
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+    private func cleanUpLegacyLaunchAgentIfNeeded() {
+        let key = "com.kuzen.task.legacyLaunchAgentCleaned"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+
+        let fileManager = FileManager.default
+        let plistURL = legacyPlistURL
+        let label = legacyLabel
+        guard fileManager.fileExists(atPath: plistURL.path) else { return }
+
+        // 登录启动早期不要阻塞主线程执行 launchctl / 文件删除。
+        Task.detached {
+            let domain = "gui/\(getuid())"
+            let process = Process()
+            process.launchPath = "/bin/launchctl"
+            process.arguments = ["bootout", domain, label]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                // Ignore unload errors; the agent may not be loaded.
             }
-        }
-    }
 
-    private nonisolated func logFileURL(pathComponent: String) -> URL {
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent("com.kuzen.task", isDirectory: true)
-            .appendingPathComponent(pathComponent)
+            try? fileManager.removeItem(at: plistURL)
+        }
     }
 }

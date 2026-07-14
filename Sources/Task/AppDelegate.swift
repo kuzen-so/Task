@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventMonitor: EventMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 尽早触发 LaunchAtLoginManager 初始化，完成旧版 LaunchAgent 清理。
+        _ = LaunchAtLoginManager.shared
+
         // 登录启动时系统窗口服务器/菜单栏可能尚未完全就绪，保守延后；
         // 普通启动则放到下一个 runloop 即可，避免固定 0.6s 的玄学等待。
         let isLoginLaunch = Self.isLaunchedByLoginItem()
@@ -33,14 +36,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 分阶段初始化：先状态栏，再浮动窗口。
         // 若窗口服务器尚未就绪（screens 为空），跳过浮动岛并在屏幕参数变化时重建。
         setupStatusBar()
-        setupPopover()
+        // NSPopover 与 NSHostingController 在登录启动早期与 NSStatusBarWindow
+        // 建立关系时容易触发释放问题，改为在 showPopover() 中按需创建。
         setupEventMonitor()
         setupFloatingIsland()
     }
 
-    /// 通过判断父进程是否为 launchd(1) 来识别是否由 LaunchAgent 开机自启。
+    /// SMAppService.mainAppService 不会传递任何启动参数或环境变量，因此用启动时系统已运行时间
+    /// 作为启发式判断：开机后 60 秒内启动视为登录自启。
     private nonisolated static func isLaunchedByLoginItem() -> Bool {
-        getppid() == 1
+        ProcessInfo.processInfo.systemUptime < 60
     }
 
     private func setupSettingsNotification() {
@@ -64,20 +69,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Status Bar
 
     private func setupStatusBar() {
+        // 登录启动时状态栏/窗口服务器可能尚未就绪，若 screens 为空则延后重试。
+        guard !NSScreen.screens.isEmpty else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.setupStatusBar()
+            }
+            return
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            let iconPath = Bundle.main.path(forResource: "statusbar_icon", ofType: "png")
-            if let path = iconPath, let image = NSImage(contentsOfFile: path) {
-                image.isTemplate = false
-                image.size = NSSize(width: 18, height: 18)
-                button.image = image
+            let image: NSImage
+            if let path = Bundle.main.path(forResource: "statusbar_icon", ofType: "png"),
+               let loaded = NSImage(contentsOfFile: path) {
+                loaded.isTemplate = false
+                loaded.size = NSSize(width: 18, height: 18)
+                image = loaded
             } else {
-                button.image = NSImage(
-                    systemSymbolName: "dice.fill",
-                    accessibilityDescription: "Task"
-                )
+                image = NSImage(systemSymbolName: "dice.fill", accessibilityDescription: "Task")!
             }
+            button.image = image
             button.action = #selector(togglePopover)
             button.target = self
         }

@@ -19,8 +19,12 @@ final class EventMonitor {
 
     deinit {
         if let handle = handle {
-            Task { @MainActor in
+            if Thread.isMainThread {
                 NSEvent.removeMonitor(handle.value)
+            } else {
+                DispatchQueue.main.sync {
+                    NSEvent.removeMonitor(handle.value)
+                }
             }
         }
     }

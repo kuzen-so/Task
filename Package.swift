@@ -12,6 +12,9 @@ let package = Package(
             name: "Task",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
+            ],
+            linkerSettings: [
+                .linkedFramework("ServiceManagement")
             ]
         )
     ]
