@@ -1,6 +1,22 @@
 import SwiftUI
 import AppKit
 import Combine
+import QuartzCore
+
+/// 吸附边集合。角落实可同时含水平+垂直边；空集表示自由悬浮。
+/// 顶部吸附保持拖拽时的水平位置（可停在其他灵动岛软件旁边），不参与自动居中。
+struct DockEdges: OptionSet {
+    let rawValue: Int
+    static let top = DockEdges(rawValue: 1 << 0)
+    static let left = DockEdges(rawValue: 1 << 1)
+    static let right = DockEdges(rawValue: 1 << 2)
+    static let bottom = DockEdges(rawValue: 1 << 3)
+}
+
+/// 内容在窗口内的水平对齐：吸附左/右边缘时面板从边缘向内展开，避免探出屏幕。
+enum IslandHorizontalAlignment {
+    case leading, center, trailing
+}
 
 @MainActor
 final class FloatingIslandManager: ObservableObject {
@@ -21,6 +37,26 @@ final class FloatingIslandManager: ObservableObject {
 
     private var isTransitioning = false
 
+    // MARK: - Position State
+
+    /// 当前吸附边组合（角落实可同时含水平+垂直边）；空集表示自由悬浮。
+    private var dockEdges: DockEdges = .top
+    /// 胶囊中心坐标；nil 表示使用默认顶部居中。
+    private var pillCenter: CGPoint?
+
+    /// 供 SwiftUI 内容对齐使用：底部吸附/低位悬浮时内容改为从窗口底部向上展开。
+    @Published private(set) var contentAtBottom = false
+    @Published private(set) var contentHorizontal: IslandHorizontalAlignment = .center
+
+    // MARK: - Drag State
+
+    private var isMouseDownOnIsland = false
+    private var isDragging = false
+    /// 拖拽刚结束时鼠标还停在岛上，等移出内容区后再恢复悬停展开，避免一松手就展开。
+    private var suppressHoverUntilExit = false
+    private var dragStartMouse: NSPoint = .zero
+    private var dragStartPillCenter: CGPoint = .zero
+
     private init() {}
 
     func setup(store: TaskStore, calendarService: CalendarService, onSelectTask: @escaping (TaskItem) -> Void) {
@@ -36,6 +72,7 @@ final class FloatingIslandManager: ObservableObject {
 
         isVisible = true
         updateExpandedHeight(animated: false)
+        restorePosition()
 
         // 登录启动时屏幕可能尚未就绪，若创建失败则稍后由屏幕参数变化通知重建。
         if targetScreen() == nil {
@@ -83,12 +120,18 @@ final class FloatingIslandManager: ObservableObject {
     // 鼠标移动/进出窗口时回调 performHoverCheck。
 
     private func performHoverCheck() {
-        guard !isTransitioning, let window = floatingWindow else { return }
+        // 鼠标按下（潜在拖拽）与拖拽期间暂停悬停展开/收起。
+        guard !isTransitioning, !isMouseDownOnIsland, !isDragging, let window = floatingWindow else { return }
 
         let mouseLoc = NSEvent.mouseLocation
         // 只检测实际内容区域，加一点边距避免边缘过于敏感。
         let checkFrame = currentContentFrame(in: window).insetBy(dx: -4, dy: -4)
         let inContent = checkFrame.contains(mouseLoc)
+
+        if suppressHoverUntilExit {
+            if !inContent { suppressHoverUntilExit = false }
+            return
+        }
 
         if inContent && !isExpanded {
             cancelPendingCollapse()
@@ -100,14 +143,42 @@ final class FloatingIslandManager: ObservableObject {
         }
     }
 
+    private var pillSize: NSSize { collapsedSize }
+    private var windowSize: NSSize { NSSize(width: Constants.Island.expandedWidth, height: expandedHeight) }
+
+    /// 窗口恒为展开大小，由胶囊中心 + 当前对齐方式推导窗口 frame。
+    private func windowFrame(forPillCenter center: CGPoint) -> NSRect {
+        let size = windowSize
+        let x: CGFloat
+        switch contentHorizontal {
+        case .leading: x = center.x - pillSize.width / 2
+        case .trailing: x = center.x + pillSize.width / 2 - size.width
+        case .center: x = center.x - size.width / 2
+        }
+        let y: CGFloat = contentAtBottom
+            ? center.y - pillSize.height / 2
+            : center.y + pillSize.height / 2 - size.height
+        return NSRect(origin: NSPoint(x: x, y: y), size: size)
+    }
+
+    /// 与 windowFrame 互逆：从窗口 frame 反推胶囊（收起态内容）frame。
+    private func currentPillFrame(in window: NSWindow) -> NSRect {
+        contentFrame(size: pillSize, in: window)
+    }
+
     private func currentContentFrame(in window: NSWindow) -> NSRect {
-        let size = currentContentSize
-        return NSRect(
-            x: window.frame.midX - size.width / 2,
-            y: window.frame.maxY - size.height,
-            width: size.width,
-            height: size.height
-        )
+        contentFrame(size: currentContentSize, in: window)
+    }
+
+    private func contentFrame(size: NSSize, in window: NSWindow) -> NSRect {
+        let x: CGFloat
+        switch contentHorizontal {
+        case .leading: x = window.frame.minX
+        case .trailing: x = window.frame.maxX - size.width
+        case .center: x = window.frame.midX - size.width / 2
+        }
+        let y: CGFloat = contentAtBottom ? window.frame.minY : window.frame.maxY - size.height
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     private var currentContentSize: NSSize {
@@ -149,6 +220,9 @@ final class FloatingIslandManager: ObservableObject {
             self?.isTransitioning = false
             self?.floatingWindow?.makeKey()
             NSApplication.shared.activate(ignoringOtherApps: true)
+            // 动画期间 mouseExited 会被 isTransitioning guard 丢弃（鼠标快速划过时），
+            // 结束后重新检测一次，若鼠标已离开则补触发收起。
+            self?.performHoverCheck()
         }
     }
 
@@ -158,6 +232,11 @@ final class FloatingIslandManager: ObservableObject {
         isExpanded = false
         DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
             self?.isTransitioning = false
+            // 同理：收起动画期间鼠标若重新进入，补触发展开。
+            // 但 App 已失活（如 Cmd+Tab 切走）时不补，避免和失活收起互相打架。
+            if NSApplication.shared.isActive {
+                self?.performHoverCheck()
+            }
         }
     }
 
@@ -196,16 +275,119 @@ final class FloatingIslandManager: ObservableObject {
         updateContentView(for: window)
 
         floatingWindow = window
-        positionWindow(window, on: screen)
+        applyRestPosition()
         Self.log("window frame=\(window.frame) screen=\(screen.frame)")
         window.orderFrontRegardless()
     }
 
-    private func positionWindow(_ window: NSWindow, on screen: NSScreen) {
-        window.setFrameOrigin(NSPoint(
-            x: screen.frame.midX - window.frame.width / 2,
-            y: screen.frame.maxY - window.frame.height
-        ))
+    // MARK: - Positioning
+
+    private func applyRestPosition(animated: Bool = false) {
+        guard let window = floatingWindow, let screen = window.screen ?? targetScreen() else { return }
+        updateContentAlignment()
+        let center = pillCenter ?? defaultPillCenter(on: screen)
+        pillCenter = center
+        let frame = windowFrame(forPillCenter: center)
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Constants.Island.snapAnimationDuration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(frame, display: true)
+            }
+        } else {
+            window.setFrame(frame, display: true)
+        }
+    }
+
+    /// 默认位置：屏幕顶部居中，胶囊顶贴屏幕上缘（与旧版固定行为一致）。
+    private func defaultPillCenter(on screen: NSScreen) -> CGPoint {
+        CGPoint(x: screen.frame.midX, y: screen.frame.maxY - pillSize.height / 2)
+    }
+
+    /// 由吸附边推导内容对齐：吸底边向上展开；吸左/右边从边缘向内展开；自由悬浮按下方剩余空间决定。
+    private func updateContentAlignment() {
+        if dockEdges.contains(.left) {
+            contentHorizontal = .leading
+        } else if dockEdges.contains(.right) {
+            contentHorizontal = .trailing
+        } else {
+            contentHorizontal = .center
+        }
+
+        if dockEdges.contains(.bottom) {
+            contentAtBottom = true
+        } else if dockEdges.contains(.top) {
+            contentAtBottom = false
+        } else {
+            contentAtBottom = !expandedFitsBelow()
+        }
+    }
+
+    /// 自由悬浮时展开面板向下是否放得下（窗口恒为展开高度）。
+    private func expandedFitsBelow() -> Bool {
+        guard let center = pillCenter, let screen = floatingWindow?.screen ?? targetScreen() else { return true }
+        return center.y + pillSize.height / 2 - windowSize.height >= screen.visibleFrame.minY
+    }
+
+    /// 拖拽过程中约束胶囊中心，保证（不可见的）窗口整体不超出屏幕。
+    private func clampedPillCenter(_ center: CGPoint, on screen: NSScreen) -> CGPoint {
+        let vf = screen.visibleFrame
+        let w = windowSize.width
+        let h = windowSize.height
+        let halfPill = pillSize.height / 2
+
+        var x = center.x
+        var y = center.y
+        if w <= vf.width {
+            x = min(max(x, vf.minX + w / 2), vf.maxX - w / 2)
+        }
+        if contentAtBottom {
+            y = min(max(y, vf.minY + halfPill), screen.frame.maxY + halfPill - h)
+        } else {
+            y = min(max(y, vf.minY + h - halfPill), screen.frame.maxY - halfPill)
+        }
+        return CGPoint(x: x, y: y)
+    }
+
+    // MARK: - Position Persistence
+
+    private func restorePosition() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: Constants.Island.dockEdgeDefaultsKey) != nil else { return }
+
+        let edges = DockEdges(rawValue: defaults.integer(forKey: Constants.Island.dockEdgeDefaultsKey))
+        guard edges != .top else { return }
+
+        let center = CGPoint(
+            x: defaults.double(forKey: Constants.Island.pillCenterXDefaultsKey),
+            y: defaults.double(forKey: Constants.Island.pillCenterYDefaultsKey)
+        )
+        guard isPillCenterOnAnyScreen(center) else { return }
+
+        dockEdges = edges
+        pillCenter = center
+    }
+
+    private func persistPosition() {
+        guard let center = pillCenter else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(dockEdges.rawValue, forKey: Constants.Island.dockEdgeDefaultsKey)
+        defaults.set(Double(center.x), forKey: Constants.Island.pillCenterXDefaultsKey)
+        defaults.set(Double(center.y), forKey: Constants.Island.pillCenterYDefaultsKey)
+    }
+
+    /// 屏幕配置变化后若位置已出屏（如拔掉外接屏），回退到默认顶部居中。
+    private func validateRestPosition() {
+        if let center = pillCenter, !isPillCenterOnAnyScreen(center) {
+            dockEdges = .top
+            pillCenter = nil
+        }
+    }
+
+    private func isPillCenterOnAnyScreen(_ center: CGPoint) -> Bool {
+        NSScreen.screens.contains {
+            $0.visibleFrame.insetBy(dx: -pillSize.width, dy: -pillSize.height).contains(center)
+        }
     }
 
     private func updateContentView(for window: NSWindow) {
@@ -240,6 +422,15 @@ final class FloatingIslandManager: ObservableObject {
         trackingView.addSubview(hostingView)
         trackingView.hoverChanged = { [weak self] in
             self?.performHoverCheck()
+        }
+        trackingView.mouseDownHandler = { [weak self] point in
+            self?.islandMouseDown(at: point)
+        }
+        trackingView.mouseDraggedHandler = { [weak self] point in
+            self?.islandMouseDragged(at: point)
+        }
+        trackingView.mouseUpHandler = { [weak self] point in
+            self?.islandMouseUp(at: point)
         }
 
         window.contentView = trackingView
@@ -279,6 +470,106 @@ final class FloatingIslandManager: ObservableObject {
         return currentContentFrame(in: window)
     }
 
+    // MARK: - Dragging
+
+    /// 鼠标在岛内容区域按下（由 IslandTrackingView 转发）。按下期间暂停悬停展开，
+    /// 移动超过 dragThreshold 才判定为拖拽，不影响正常点击。
+    func islandMouseDown(at mouse: NSPoint) {
+        // 窗口恒为展开大小，只有按在可见内容（胶囊/展开面板）上才允许拖拽，
+        // 否则透明区域的点击会意外把岛拖走。
+        guard let window = floatingWindow,
+              currentContentFrame(in: window).insetBy(dx: -4, dy: -4).contains(mouse) else { return }
+        isMouseDownOnIsland = true
+        dragStartMouse = mouse
+        let pill = currentPillFrame(in: window)
+        dragStartPillCenter = CGPoint(x: pill.midX, y: pill.midY)
+    }
+
+    func islandMouseDragged(at mouse: NSPoint) {
+        guard isMouseDownOnIsland else { return }
+        if !isDragging {
+            let distance = hypot(mouse.x - dragStartMouse.x, mouse.y - dragStartMouse.y)
+            guard distance >= Constants.Island.dragThreshold else { return }
+            beginDrag()
+        }
+        dragMoved(to: mouse)
+    }
+
+    func islandMouseUp(at mouse: NSPoint) {
+        isMouseDownOnIsland = false
+        if isDragging {
+            endDrag()
+            suppressHoverUntilExit = true
+        } else {
+            // 普通点击：恢复按下期间被暂停的悬停逻辑。
+            performHoverCheck()
+        }
+    }
+
+    private func beginDrag() {
+        cancelPendingCollapse()
+        isDragging = true
+        // 拖拽即脱离吸附，回到自由悬浮对齐；展开状态下先收起成胶囊跟着鼠标走。
+        dockEdges = []
+        if isExpanded {
+            isExpanded = false
+        }
+    }
+
+    private func dragMoved(to mouse: NSPoint) {
+        guard let window = floatingWindow else { return }
+        var center = CGPoint(
+            x: dragStartPillCenter.x + (mouse.x - dragStartMouse.x),
+            y: dragStartPillCenter.y + (mouse.y - dragStartMouse.y)
+        )
+        pillCenter = center
+        updateContentAlignment()
+        if let screen = window.screen ?? targetScreen() {
+            center = clampedPillCenter(center, on: screen)
+            pillCenter = center
+        }
+        window.setFrameOrigin(windowFrame(forPillCenter: center).origin)
+    }
+
+    /// 松手：靠近屏幕四边则动画吸附；顶部吸附保持当前水平位置，方便停在其他灵动岛软件旁边。
+    private func endDrag() {
+        isDragging = false
+        guard let window = floatingWindow, let center = pillCenter,
+              let screen = window.screen ?? targetScreen() else { return }
+
+        let vf = screen.visibleFrame
+        let threshold = Constants.Island.snapThreshold
+        var edges: DockEdges = []
+        var target = center
+
+        if center.x - vf.minX < threshold {
+            edges.insert(.left)
+            target.x = vf.minX + pillSize.width / 2
+        } else if vf.maxX - center.x < threshold {
+            edges.insert(.right)
+            target.x = vf.maxX - pillSize.width / 2
+        }
+        if center.y - vf.minY < threshold {
+            edges.insert(.bottom)
+            target.y = vf.minY + pillSize.height / 2
+        } else if screen.frame.maxY - center.y < threshold {
+            edges.insert(.top)
+            target.y = screen.frame.maxY - pillSize.height / 2
+        }
+
+        dockEdges = edges
+        pillCenter = target
+        persistPosition()
+
+        updateContentAlignment()
+        let frame = windowFrame(forPillCenter: target)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Constants.Island.snapAnimationDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().setFrame(frame, display: true)
+        }
+    }
+
     // MARK: - Screen
 
     private func targetScreen() -> NSScreen? {
@@ -315,9 +606,8 @@ final class FloatingIslandManager: ObservableObject {
         if let window = floatingWindow {
             // 复用已有窗口，避免关闭/释放导致的 autorelease 崩溃。
             updateContentView(for: window)
-            if let screen = targetScreen() {
-                positionWindow(window, on: screen)
-            }
+            validateRestPosition()
+            applyRestPosition()
             if wasExpanded {
                 expand()
             }
@@ -365,8 +655,14 @@ final class FloatingIslandWindow: NSWindow {
 /// 使用 NSTrackingArea 比 NSEvent.addGlobalMonitorForEvents 更可靠，不需要辅助功能权限。
 final class IslandTrackingView: NSView {
     var hoverChanged: (() -> Void)?
+    var mouseDownHandler: ((NSPoint) -> Void)?
+    var mouseDraggedHandler: ((NSPoint) -> Void)?
+    var mouseUpHandler: ((NSPoint) -> Void)?
 
     private var trackingArea: NSTrackingArea?
+
+    /// 应用未激活时也直接收到第一次点击，这样才能从岛背景区域发起拖拽。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -398,5 +694,19 @@ final class IslandTrackingView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         hoverChanged?()
+    }
+
+    // 空白区域的鼠标事件会沿响应链冒泡到这里（SwiftUI 按钮/输入框/滚动区会自己消费，
+    // 不会触发拖拽），超过 dragThreshold 后由 manager 判定为拖拽。
+    override func mouseDown(with event: NSEvent) {
+        mouseDownHandler?(NSEvent.mouseLocation)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        mouseDraggedHandler?(NSEvent.mouseLocation)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseUpHandler?(NSEvent.mouseLocation)
     }
 }

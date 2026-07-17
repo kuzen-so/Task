@@ -14,6 +14,12 @@ enum Constants {
         static let animationDuration: TimeInterval = 0.45
         static let hoverOutDelay: TimeInterval = 0.05
 
+        /// 鼠标按下后移动超过该距离判定为拖拽。
+        static let dragThreshold: CGFloat = 4
+        /// 松手后胶囊中心距屏幕边缘小于该距离时吸附（顶部除外）。
+        static let snapThreshold: CGFloat = 48
+        static let snapAnimationDuration: TimeInterval = 0.32
+
         static let collapsedWidth: CGFloat = 160
         static let collapsedHeight: CGFloat = 30
         static let collapsedCornerRadius: CGFloat = 4
@@ -23,6 +29,11 @@ enum Constants {
         static let expandedCornerRadius: CGFloat = 30
 
         static let expandedTopInset: CGFloat = 0
+
+        /// 持久化键：吸附边 + 胶囊中心坐标。
+        static let dockEdgeDefaultsKey = "island.dockEdge"
+        static let pillCenterXDefaultsKey = "island.pillCenterX"
+        static let pillCenterYDefaultsKey = "island.pillCenterY"
 
         static let headerHeight: CGFloat = 64
         static let newTaskAreaHeight: CGFloat = 72

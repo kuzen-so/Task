@@ -31,6 +31,18 @@ struct FloatingIslandView: View {
         }
     }
 
+    /// 内容在窗口内的对齐：窗口恒为展开大小，收起时只有对齐角落的胶囊可见。
+    /// 顶部吸附/自由悬浮 → 顶部居中向下展开；底部吸附 → 底部向上展开；左/右吸附 → 从对应边缘向内展开。
+    private var contentAlignment: Alignment {
+        let horizontal: HorizontalAlignment
+        switch manager.contentHorizontal {
+        case .leading: horizontal = .leading
+        case .center: horizontal = .center
+        case .trailing: horizontal = .trailing
+        }
+        return Alignment(horizontal: horizontal, vertical: manager.contentAtBottom ? .bottom : .top)
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -51,8 +63,8 @@ struct FloatingIslandView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.8), value: manager.isExpanded)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: manager.expandedHeight)
         .clipShape(islandShape)
-        // 窗口已经是展开大小，内容靠顶部对齐，模拟从屏幕顶部向下展开
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // 窗口恒为展开大小，内容按吸附边对齐：顶部向下展开，底部/低悬浮向上展开，左右吸附从边缘向内展开
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: contentAlignment)
         .ignoresSafeArea()
         .onAppear {
             stripCenterOffset = 0
