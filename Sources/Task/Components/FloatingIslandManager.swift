@@ -355,9 +355,8 @@ final class FloatingIslandManager: ObservableObject {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: Constants.Island.dockEdgeDefaultsKey) != nil else { return }
 
+        // 顶部吸附同样要恢复水平位置（可停在其他灵动岛软件旁边），否则重启后会回到默认居中。
         let edges = DockEdges(rawValue: defaults.integer(forKey: Constants.Island.dockEdgeDefaultsKey))
-        guard edges != .top else { return }
-
         let center = CGPoint(
             x: defaults.double(forKey: Constants.Island.pillCenterXDefaultsKey),
             y: defaults.double(forKey: Constants.Island.pillCenterYDefaultsKey)
