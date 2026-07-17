@@ -12,7 +12,7 @@ final class TaskStore: ObservableObject {
     private var saveWorkItem: DispatchWorkItem?
     private var timer: Timer?
 
-    private var remindersSyncTimer: Timer?
+    private var remindersSyncTimer: DispatchSourceTimer?
     private var remindersServiceCancellable: AnyCancellable?
     private var isSyncingReminders = false
 
@@ -25,7 +25,7 @@ final class TaskStore: ObservableObject {
                 remindersServiceCancellable = service.$isAuthorized
                     .removeDuplicates()
                     .sink { [weak self] isAuthorized in
-                        self?.updateRemindersSyncTimer()
+                        self?.updateRemindersSyncTimer(isAuthorized: isAuthorized)
                         if isAuthorized {
                             self?.syncReminders()
                         }
@@ -38,14 +38,22 @@ final class TaskStore: ObservableObject {
     var onTaskCompleted: ((TaskItem) -> Void)?
 
     init() {
+        registerDefaultSettings()
         load()
         startTimerIfNeeded()
         updateRemindersSyncTimer()
     }
 
+    private func registerDefaultSettings() {
+        UserDefaults.standard.register(defaults: [
+            "remindersAutoSyncEnabled": true,
+            "remindersSyncIntervalSeconds": 60.0
+        ])
+    }
+
     deinit {
         MainActor.assumeIsolated {
-            remindersSyncTimer?.invalidate()
+            remindersSyncTimer?.cancel()
             remindersServiceCancellable?.cancel()
         }
     }
@@ -81,7 +89,7 @@ final class TaskStore: ObservableObject {
             }
         }
 
-        tasks.insert(task, at: 0)
+        tasks.append(task)
         setActive(task)
         save()
     }
@@ -165,11 +173,12 @@ final class TaskStore: ObservableObject {
 
     // MARK: - Reminders Sync
 
-    func updateRemindersSyncTimer() {
-        remindersSyncTimer?.invalidate()
+    func updateRemindersSyncTimer(isAuthorized: Bool? = nil) {
+        remindersSyncTimer?.cancel()
         remindersSyncTimer = nil
 
-        guard let service = remindersService, service.isAuthorized else { return }
+        let effectiveAuthorized = isAuthorized ?? remindersService?.isAuthorized ?? false
+        guard remindersService != nil, effectiveAuthorized else { return }
 
         let isEnabled = UserDefaults.standard.bool(forKey: "remindersAutoSyncEnabled")
         guard isEnabled else { return }
@@ -177,19 +186,20 @@ final class TaskStore: ObservableObject {
         let interval = UserDefaults.standard.double(forKey: "remindersSyncIntervalSeconds")
         let effectiveInterval = interval > 0 ? interval : 60.0
 
-        remindersSyncTimer = Timer.scheduledTimer(withTimeInterval: effectiveInterval, repeats: true) { [weak self] _ in
+        let newTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        newTimer.schedule(deadline: .now() + effectiveInterval, repeating: effectiveInterval)
+        newTimer.setEventHandler { [weak self] in
             Task { @MainActor in
                 self?.syncReminders()
             }
         }
+        newTimer.activate()
+        remindersSyncTimer = newTimer
     }
 
     func syncReminders() {
         guard !isSyncingReminders else { return }
         guard let service = remindersService, service.isAuthorized else { return }
-
-        let isEnabled = UserDefaults.standard.bool(forKey: "remindersAutoSyncEnabled")
-        guard isEnabled else { return }
 
         isSyncingReminders = true
 
@@ -249,29 +259,38 @@ final class TaskStore: ObservableObject {
 
     // MARK: - Timer
 
+    private var timerTaskID: UUID?
+    /// 已计时但尚未写入模型的秒数；攒满 60 秒或计时停止时统一 flush，
+    /// 避免每秒修改 @Published tasks 导致整个灵动岛视图重建。
+    private var pendingElapsed: TimeInterval = 0
+
     private func startTimerIfNeeded() {
+        flushPendingElapsed()
         timer?.invalidate()
         timer = nil
+        timerTaskID = nil
 
         guard let activeTask = tasks.first(where: { $0.isActive && !$0.isCompleted }) else { return }
+        timerTaskID = activeTask.id
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
-                guard let index = self.tasks.firstIndex(where: { $0.id == activeTask.id }) else { return }
-                guard !self.tasks[index].isCompleted else {
-                    self.tasks[index].isActive = false
-                    self.timer?.invalidate()
-                    self.timer = nil
-                    return
-                }
-                self.tasks[index].elapsedTime += 1
-                // 每分钟保存一次，避免高频写盘
-                if Int(self.tasks[index].elapsedTime) % 60 == 0 {
-                    self.save()
+                self.pendingElapsed += 1
+                if self.pendingElapsed >= 60 {
+                    self.flushPendingElapsed()
                 }
             }
         }
+    }
+
+    /// 把累计的计时增量写入模型并保存（每分钟一次，或计时停止/切换任务时）。
+    private func flushPendingElapsed() {
+        defer { pendingElapsed = 0 }
+        guard pendingElapsed > 0, let id = timerTaskID,
+              let index = tasks.firstIndex(where: { $0.id == id }) else { return }
+        tasks[index].elapsedTime += pendingElapsed
+        save()
     }
 
     // MARK: - Persistence
@@ -287,6 +306,7 @@ final class TaskStore: ObservableObject {
     }
 
     func flushSave() {
+        flushPendingElapsed()
         saveWorkItem?.cancel()
         saveWorkItem = nil
         performSave(tasks)

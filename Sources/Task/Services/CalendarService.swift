@@ -110,21 +110,18 @@ final class CalendarService: ObservableObject {
 
         guard fetchTask == nil else { return }
 
+        // 串行消费请求队列：循环取出 pendingRequest 执行，执行期间新来的请求会覆盖
+        // pendingRequest 并在下一轮被处理。不能在 defer 里回调 refreshAll——那样
+        // pendingRequest 在执行完后依然非 nil，会形成无休止的自触发刷新循环，拖满 CPU。
         fetchTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
-            defer {
-                self.fetchTask = nil
-                if let next = self.pendingRequest {
-                    let request = next
-                    self.pendingRequest = nil
-                    self.refreshAll(centeredOn: request.selectedDate,
-                                    stripDays: request.stripDays,
-                                    upcomingDays: request.upcomingDays)
-                }
+            while let request = self.pendingRequest {
+                self.pendingRequest = nil
+                await self.performRefresh(centeredOn: request.selectedDate,
+                                          stripDays: request.stripDays,
+                                          upcomingDays: request.upcomingDays)
             }
-            await self.performRefresh(centeredOn: selectedDate,
-                                      stripDays: stripDays,
-                                      upcomingDays: upcomingDays)
+            self.fetchTask = nil
         }
     }
 
@@ -180,21 +177,27 @@ final class CalendarService: ObservableObject {
         do {
             let allEvents = try await fetchEvents(start: unionStart, end: unionEnd)
 
-            todayEvents = allEvents
+            // @Published 赋值即触发视图更新，内容没变时不发布，避免无谓的重绘。
+            let newTodayEvents = allEvents
                 .filter { $0.startDate < todayEnd && $0.endDate > todayStart }
                 .sorted { $0.startDate < $1.startDate }
 
-            selectedDateEvents = allEvents
+            let newSelectedDateEvents = allEvents
                 .filter { $0.startDate < selectedEnd && $0.endDate > selectedStart }
                 .sorted { $0.startDate < $1.startDate }
 
-            upcomingEvents = allEvents
+            let newUpcomingEvents = allEvents
                 .filter { $0.startDate >= now && $0.startDate < upcomingEnd }
                 .sorted { $0.startDate < $1.startDate }
 
-            stripEvents = allEvents
+            let newStripEvents = allEvents
                 .filter { $0.startDate < stripEnd && $0.endDate > stripStart }
                 .sorted { $0.startDate < $1.startDate }
+
+            if todayEvents != newTodayEvents { todayEvents = newTodayEvents }
+            if selectedDateEvents != newSelectedDateEvents { selectedDateEvents = newSelectedDateEvents }
+            if upcomingEvents != newUpcomingEvents { upcomingEvents = newUpcomingEvents }
+            if stripEvents != newStripEvents { stripEvents = newStripEvents }
         } catch {
             Self.log("performRefresh: failed error=\(error)")
             todayEvents = []

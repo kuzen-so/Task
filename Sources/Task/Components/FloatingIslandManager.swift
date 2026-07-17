@@ -7,7 +7,6 @@ final class FloatingIslandManager: ObservableObject {
     static let shared = FloatingIslandManager()
 
     private var floatingWindow: NSWindow?
-    private var mouseMovedMonitor: Any?
     private var screenChangeWorkItem: DispatchWorkItem?
     private var collapseWorkItem: DispatchWorkItem?
 
@@ -43,7 +42,6 @@ final class FloatingIslandManager: ObservableObject {
             Self.log("setup: no screen available yet, deferring window creation")
         } else {
             createFloatingWindow()
-            startMouseMonitor()
         }
         observeAppState()
         observeScreenChanges()
@@ -52,12 +50,10 @@ final class FloatingIslandManager: ObservableObject {
     func show() {
         isVisible = true
         floatingWindow?.orderFrontRegardless()
-        startMouseMonitor()
     }
 
     func hide() {
         isVisible = false
-        stopMouseMonitor()
         if isExpanded {
             collapse()
         }
@@ -83,24 +79,8 @@ final class FloatingIslandManager: ObservableObject {
 
     // MARK: - Hover Detection
 
-    private func startMouseMonitor() {
-        stopMouseMonitor()
-        mouseMovedMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { [weak self] _ in
-            Task { @MainActor in
-                self?.performHoverCheck()
-            }
-        }
-        if mouseMovedMonitor == nil {
-            Self.log("startMouseMonitor: global monitor returned nil; accessibility permission may be denied")
-        }
-    }
-
-    private func stopMouseMonitor() {
-        if let monitor = mouseMovedMonitor {
-            NSEvent.removeMonitor(monitor)
-            mouseMovedMonitor = nil
-        }
-    }
+    // hover 检测由 IslandTrackingView 的 NSTrackingArea 完成（见 updateContentView），
+    // 鼠标移动/进出窗口时回调 performHoverCheck。
 
     private func performHoverCheck() {
         guard !isTransitioning, let window = floatingWindow else { return }
@@ -320,7 +300,6 @@ final class FloatingIslandManager: ObservableObject {
             guard let self = self else { return }
             if self.floatingWindow == nil, self.isVisible {
                 self.createFloatingWindow()
-                self.startMouseMonitor()
             } else {
                 self.rebuildWindow()
             }
