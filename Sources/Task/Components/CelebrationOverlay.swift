@@ -5,14 +5,21 @@ import QuartzCore
 final class CelebrationOverlay {
     private var window: NSWindow?
 
-    func show(near sourceFrame: NSRect) {
+    /// 在灵动岛位置爆出庆祝动画：动画窗口与岛顶部对齐并完全盖住它，层级也高于岛。
+    func show(covering islandFrame: NSRect) {
         window?.orderOut(nil)
         window = nil
 
-        let size = NSSize(width: 240, height: 240)
+        // 左右和下方留出粒子散布/飘落的空间，窗口顶部与岛顶部对齐（岛贴着屏幕顶边，上方没有空间）。
+        let sideMargin: CGFloat = 100
+        let fallMargin: CGFloat = 320
+        let size = NSSize(
+            width: islandFrame.width + sideMargin * 2,
+            height: islandFrame.height + fallMargin
+        )
         let origin = NSPoint(
-            x: sourceFrame.midX - size.width / 2,
-            y: sourceFrame.minY - size.height + 20
+            x: islandFrame.midX - size.width / 2,
+            y: islandFrame.maxY - size.height
         )
 
         let window = NSWindow(
@@ -24,17 +31,23 @@ final class CelebrationOverlay {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
-        window.level = .statusBar
+        // 灵动岛是 .popUpMenu(101)，动画必须比它高才能盖在岛前面。
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
         window.ignoresMouseEvents = true
 
-        let view = CelebrationView(frame: NSRect(origin: .zero, size: size))
+        // 发射点 = 岛的中心（转换为动画 view 内部坐标）。
+        let emitterPoint = NSPoint(
+            x: size.width / 2,
+            y: size.height - islandFrame.height / 2
+        )
+        let view = CelebrationView(frame: NSRect(origin: .zero, size: size), emitterPoint: emitterPoint)
         window.contentView = view
 
         self.window = window
         window.orderFrontRegardless()
 
-        // 1.5 秒后关闭
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        // 粒子全部淡出后关闭（最后一批在 0.25s 时生成，alpha 2.0s 归零）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak self] in
             self?.window?.orderOut(nil)
             self?.window = nil
         }
@@ -43,58 +56,59 @@ final class CelebrationOverlay {
 
 private final class CelebrationView: NSView {
     private let emitterLayer = CAEmitterLayer()
+    private let emitterPoint: NSPoint
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect, emitterPoint: NSPoint) {
+        self.emitterPoint = emitterPoint
         super.init(frame: frameRect)
         wantsLayer = true
         setupEmitter()
     }
 
+    @available(*, unavailable)
     required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        wantsLayer = true
-        setupEmitter()
+        fatalError("init(coder:) is not supported")
     }
 
     override func layout() {
         super.layout()
-        emitterLayer.emitterPosition = CGPoint(x: bounds.midX, y: bounds.maxY - 20)
+        emitterLayer.emitterPosition = emitterPoint
     }
 
     private func setupEmitter() {
         guard let layer = self.layer else { return }
 
-        emitterLayer.emitterPosition = CGPoint(x: bounds.midX, y: bounds.maxY - 20)
-        emitterLayer.emitterSize = CGSize(width: 40, height: 10)
-        emitterLayer.emitterMode = .outline
-        emitterLayer.emitterShape = .line
+        // 注意：macOS 未翻转的 layer 坐标系 y 轴向上（与 iOS 相反），
+        // 所以向上发射是 π/2，向下的重力是负的 yAcceleration。
+        emitterLayer.emitterPosition = emitterPoint
+        emitterLayer.emitterShape = .point
 
         let cells = Constants.celebrationEmojis.compactMap { emoji -> CAEmitterCell? in
             guard let image = renderEmoji(emoji, size: 28) else { return nil }
             let cell = CAEmitterCell()
             cell.contents = image
-            cell.birthRate = 3
-            cell.lifetime = 1.4
-            cell.lifetimeRange = 0.3
+            cell.birthRate = 10
+            cell.lifetime = 2.0
+            cell.lifetimeRange = 0.4
             cell.scale = 1.0
             cell.scaleRange = 0.3
             cell.scaleSpeed = -0.2
-            cell.velocity = 120
-            cell.velocityRange = 60
-            cell.yAcceleration = 300
-            cell.emissionLongitude = .pi
-            cell.emissionRange = .pi / 4
+            cell.velocity = 170
+            cell.velocityRange = 90
+            cell.yAcceleration = -360
+            cell.emissionLongitude = .pi / 2
+            cell.emissionRange = .pi
             cell.spin = 2
             cell.spinRange = 4
-            cell.alphaSpeed = -0.8
+            cell.alphaSpeed = -0.5
             return cell
         }
 
         emitterLayer.emitterCells = cells
         layer.addSublayer(emitterLayer)
 
-        // 0.5 秒后停止生成新粒子，已生成的继续下落直到 lifetime 结束
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        // 0.25 秒后停止生成新粒子，形成一次性"爆出"效果；已生成的继续抛落直到淡出。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             self?.emitterLayer.birthRate = 0
         }
     }

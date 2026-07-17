@@ -159,14 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showCelebration(for task: TaskItem) {
-        guard let window = FloatingIslandManager.shared.visibleContentFrame else { return }
-        let sourceFrame = NSRect(
-            x: window.midX,
-            y: window.minY,
-            width: 0,
-            height: 0
-        )
-        celebrationOverlay.show(near: sourceFrame)
+        // 传完整的岛 frame，动画窗口会对齐并盖住整个岛，emoji 从岛中心爆出。
+        guard let islandFrame = FloatingIslandManager.shared.visibleContentFrame else { return }
+        celebrationOverlay.show(covering: islandFrame)
     }
 
     @objc func showSettings() {
