@@ -3,6 +3,11 @@ import AppKit
 import Combine
 import QuartzCore
 
+extension Notification.Name {
+    /// 设置里改了顶部停靠位置（居中/刘海左侧/刘海右侧），岛需要回到新的默认位置。
+    static let islandTopDockSideChanged = Notification.Name("com.kuzen.task.islandTopDockSideChanged")
+}
+
 /// 吸附边集合。角落实可同时含水平+垂直边；空集表示自由悬浮。
 /// 顶部吸附保持拖拽时的水平位置（可停在其他灵动岛软件旁边），不参与自动居中。
 struct DockEdges: OptionSet {
@@ -82,6 +87,20 @@ final class FloatingIslandManager: ObservableObject {
         }
         observeAppState()
         observeScreenChanges()
+
+        calendarService.$todayEvents
+            .sink { [weak self] _ in
+                self?.evaluateEventAlert()
+            }
+            .store(in: &cancellables)
+        startEventAlertTimer()
+        startCalendarIdleRefreshTimer()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTopDockSideChange),
+            name: .islandTopDockSideChanged,
+            object: nil
+        )
     }
 
     func show() {
@@ -214,6 +233,10 @@ final class FloatingIslandManager: ObservableObject {
 
     private func expand() {
         guard !isExpanded, !isTransitioning else { return }
+        // 悬停展开即视为已读日程提醒。
+        if alertEvent != nil {
+            alertEvent = nil
+        }
         isTransitioning = true
         isExpanded = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
@@ -284,9 +307,9 @@ final class FloatingIslandManager: ObservableObject {
 
     private func applyRestPosition(animated: Bool = false) {
         guard let window = floatingWindow, let screen = window.screen ?? targetScreen() else { return }
-        updateContentAlignment()
         let center = pillCenter ?? defaultPillCenter(on: screen)
         pillCenter = center
+        updateContentAlignment()
         let frame = windowFrame(forPillCenter: center)
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
@@ -299,12 +322,33 @@ final class FloatingIslandManager: ObservableObject {
         }
     }
 
-    /// 默认位置：屏幕顶部居中，胶囊顶贴屏幕上缘（与旧版固定行为一致）。
+    /// 默认位置：屏幕顶部，胶囊顶贴屏幕上缘。水平位置由设置决定：居中（默认）或停靠刘海
+    /// 左/右侧（用 auxiliaryTopLeftArea/RightArea 精确定位），避让其他灵动岛软件。
     private func defaultPillCenter(on screen: NSScreen) -> CGPoint {
-        CGPoint(x: screen.frame.midX, y: screen.frame.maxY - pillSize.height / 2)
+        let y = screen.frame.maxY - pillSize.height / 2
+        let side = UserDefaults.standard.string(forKey: Constants.Island.topDockSideDefaultsKey) ?? "center"
+        let x: CGFloat
+        switch side {
+        case "left":
+            if let area = screen.auxiliaryTopLeftArea, area.width >= pillSize.width {
+                x = area.midX
+            } else {
+                x = screen.visibleFrame.minX + pillSize.width / 2 + 12
+            }
+        case "right":
+            if let area = screen.auxiliaryTopRightArea, area.width >= pillSize.width {
+                x = area.midX
+            } else {
+                x = screen.visibleFrame.maxX - pillSize.width / 2 - 12
+            }
+        default:
+            x = screen.frame.midX
+        }
+        return CGPoint(x: x, y: y)
     }
 
     /// 由吸附边推导内容对齐：吸底边向上展开；吸左/右边从边缘向内展开；自由悬浮按下方剩余空间决定。
+    /// 顶部吸附/悬浮时若展开面板居中会超出屏幕（如停靠刘海一侧），自动改为从对应边缘向内展开。
     private func updateContentAlignment() {
         if dockEdges.contains(.left) {
             contentHorizontal = .leading
@@ -312,6 +356,15 @@ final class FloatingIslandManager: ObservableObject {
             contentHorizontal = .trailing
         } else {
             contentHorizontal = .center
+            if let center = pillCenter, let screen = floatingWindow?.screen ?? targetScreen() {
+                let halfWidth = Constants.Island.expandedWidth / 2
+                let vf = screen.visibleFrame
+                if center.x - halfWidth < vf.minX {
+                    contentHorizontal = .leading
+                } else if center.x + halfWidth > vf.maxX {
+                    contentHorizontal = .trailing
+                }
+            }
         }
 
         if dockEdges.contains(.bottom) {
@@ -456,6 +509,85 @@ final class FloatingIslandManager: ObservableObject {
             }
         }
         return nil
+    }
+
+    // MARK: - Event Alert（模仿 Vibe Island：需要你了就发光，不展开、不抢焦点）
+
+    /// 当前正在提醒的日程：开始前 leadTime 内（或刚开始 graceTime 内）触发，
+    /// 胶囊发光脉冲并显示日程标题；用户悬停展开即视为已读。
+    @Published private(set) var alertEvent: CalendarEvent?
+    /// 本次运行已提醒过的日程 id，避免重复发光。
+    private var alertedEventIDs = Set<String>()
+    private var eventAlertTimer: DispatchSourceTimer?
+    private var calendarIdleRefreshTimer: DispatchSourceTimer?
+
+    private func startEventAlertTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + Constants.Island.eventAlertCheckInterval,
+                       repeating: Constants.Island.eventAlertCheckInterval)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.evaluateEventAlert()
+            }
+        }
+        timer.activate()
+        eventAlertTimer = timer
+    }
+
+    /// 未展开时日历数据只在 onAppear/展开时刷新，提醒会失效；这里每 5 分钟静默刷新一次。
+    private func startCalendarIdleRefreshTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + Constants.Island.calendarIdleRefreshInterval,
+                       repeating: Constants.Island.calendarIdleRefreshInterval)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor in
+                guard let self = self, let service = self.calendarService, service.isAuthorized else { return }
+                service.refreshAll(centeredOn: Date())
+            }
+        }
+        timer.activate()
+        calendarIdleRefreshTimer = timer
+    }
+
+    private func evaluateEventAlert() {
+        guard UserDefaults.standard.bool(forKey: Constants.Island.eventAlertEnabledDefaultsKey) else {
+            alertEvent = nil
+            return
+        }
+        let now = Date()
+        if let current = alertEvent {
+            // 开始超过宽限期后自动撤下。
+            if current.startDate < now.addingTimeInterval(-Constants.Island.eventAlertGraceTime) {
+                alertEvent = nil
+            } else {
+                return
+            }
+        }
+        let windowStart = now.addingTimeInterval(-Constants.Island.eventAlertGraceTime)
+        let windowEnd = now.addingTimeInterval(Constants.Island.eventAlertLeadTime)
+        guard let next = calendarService?.todayEvents.first(where: {
+            !$0.isAllDay
+                && $0.startDate >= windowStart
+                && $0.startDate <= windowEnd
+                && !alertedEventIDs.contains($0.id)
+        }) else { return }
+        alertEvent = next
+        alertedEventIDs.insert(next.id)
+    }
+
+    /// 设置里改了顶部停靠位置：清掉保存的位置，回到新的默认位置。
+    @objc private func handleTopDockSideChange() {
+        dockEdges = .top
+        pillCenter = nil
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Constants.Island.dockEdgeDefaultsKey)
+        defaults.removeObject(forKey: Constants.Island.pillCenterXDefaultsKey)
+        defaults.removeObject(forKey: Constants.Island.pillCenterYDefaultsKey)
+        if isExpanded {
+            collapse()
+        }
+        updateContentAlignment()
+        applyRestPosition(animated: true)
     }
 
     // MARK: - Window Frame Access

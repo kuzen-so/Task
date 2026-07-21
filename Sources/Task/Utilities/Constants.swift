@@ -33,6 +33,18 @@ enum Constants {
         static let pillCenterXDefaultsKey = "island.pillCenterX"
         static let pillCenterYDefaultsKey = "island.pillCenterY"
 
+        /// 顶部吸附时的默认水平停靠：center / left / right（刘海两侧，避让其他灵动岛软件）。
+        static let topDockSideDefaultsKey = "islandTopDockSide"
+        /// 日程临近时胶囊发光提醒开关。
+        static let eventAlertEnabledDefaultsKey = "islandEventAlertEnabled"
+        /// 日程开始前多久触发发光提醒。
+        static let eventAlertLeadTime: TimeInterval = 300
+        /// 日程开始后提醒继续保留多久。
+        static let eventAlertGraceTime: TimeInterval = 180
+        static let eventAlertCheckInterval: TimeInterval = 30
+        /// 未展开时日历数据的周期静默刷新间隔（保证提醒与胶囊倒计时新鲜）。
+        static let calendarIdleRefreshInterval: TimeInterval = 300
+
         static let headerHeight: CGFloat = 64
         static let newTaskAreaHeight: CGFloat = 72
         static let taskRowHeight: CGFloat = 48

@@ -63,6 +63,12 @@ struct FloatingIslandView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.8), value: manager.isExpanded)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: manager.expandedHeight)
         .clipShape(islandShape)
+        .overlay {
+            // 日程临近提醒：胶囊发光脉冲（不展开、不抢焦点），悬停展开即已读。
+            if manager.alertEvent != nil && !manager.isExpanded {
+                IslandPulseOverlay(cornerRadius: Constants.Island.collapsedBottomCornerRadius)
+            }
+        }
         // 窗口恒为展开大小，内容按吸附边对齐：顶部向下展开，底部/低悬浮向上展开，左右吸附从边缘向内展开
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: contentAlignment)
         .ignoresSafeArea()
@@ -91,7 +97,84 @@ struct FloatingIslandView: View {
 
     // MARK: - Collapsed
 
+    /// 收起态分级显示（模仿 Vibe Island：不展开也有信息量）：
+    /// 日程提醒（橙色）> 1 小时内日程（蓝色倒计时）> 进行中任务 > 默认图标+任务数。
     private var collapsedContent: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let now = context.date
+            if let alert = manager.alertEvent {
+                eventPillContent(alert, now: now, accent: .orange)
+            } else if let event = nextEvent(at: now) {
+                eventPillContent(event, now: now, accent: Color(red: 0.35, green: 0.65, blue: 1.0))
+            } else if let active = store.tasks.first(where: { $0.isActive && !$0.isCompleted }) {
+                activeTaskPillContent(active)
+            } else {
+                defaultPillContent
+            }
+        }
+    }
+
+    /// 1 小时内将开始或正在进行中的最近一个日程。
+    private func nextEvent(at now: Date) -> CalendarEvent? {
+        calendarService.todayEvents.first(where: {
+            !$0.isAllDay && $0.endDate > now && $0.startDate < now.addingTimeInterval(3600)
+        })
+    }
+
+    private func eventPillContent(_ event: CalendarEvent, now: Date, accent: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(accent)
+                .frame(width: 6, height: 6)
+
+            Text(countdownText(for: event, at: now))
+                .font(IslandStyles.bodyFont(size: 12, weight: .semibold))
+                .foregroundColor(accent)
+                .fixedSize()
+
+            Text(event.title)
+                .font(IslandStyles.bodyFont(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 12)
+    }
+
+    private func countdownText(for event: CalendarEvent, at now: Date) -> String {
+        if event.startDate <= now && now < event.endDate {
+            return "进行中"
+        }
+        let minutes = max(1, Int(ceil(event.startDate.timeIntervalSince(now) / 60)))
+        return "\(minutes)分后"
+    }
+
+    private func activeTaskPillContent(_ task: TaskItem) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "play.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.green)
+
+            Text(task.title)
+                .font(IslandStyles.bodyFont(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+
+            Text("\(store.activeTasks.count)")
+                .font(IslandStyles.bodyFont(size: 13, weight: .semibold))
+                .foregroundColor(IslandStyles.secondaryText)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 12)
+    }
+
+    private var defaultPillContent: some View {
         HStack(spacing: 5) {
             Image(systemName: "dice.fill")
                 .font(.system(size: 12, weight: .semibold))
@@ -376,6 +459,23 @@ struct FloatingIslandView: View {
 }
 
 // MARK: - AnyShape Helper
+
+/// 日程提醒的呼吸光圈（macOS 13 兼容的 repeatForever 动画）。
+private struct IslandPulseOverlay: View {
+    let cornerRadius: CGFloat
+    @State private var glowing = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(Color.orange.opacity(glowing ? 0.15 : 0.85), lineWidth: 1.5)
+            .shadow(color: Color.orange.opacity(glowing ? 0.15 : 0.55), radius: glowing ? 2 : 8)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    glowing = true
+                }
+            }
+    }
+}
 
 struct AnyShape: Shape {
     private let path: @Sendable (CGRect) -> Path

@@ -47,7 +47,9 @@ final class TaskStore: ObservableObject {
     private func registerDefaultSettings() {
         UserDefaults.standard.register(defaults: [
             "remindersAutoSyncEnabled": true,
-            "remindersSyncIntervalSeconds": 60.0
+            "remindersSyncIntervalSeconds": 60.0,
+            Constants.Island.eventAlertEnabledDefaultsKey: true,
+            Constants.Island.topDockSideDefaultsKey: "center"
         ])
     }
 
@@ -260,8 +262,10 @@ final class TaskStore: ObservableObject {
     // MARK: - Timer
 
     private var timerTaskID: UUID?
+    /// 当前计时段的起始时间；用时间戳记账代替每秒定时器，消除常驻 1s 定时器的 CPU 唤醒。
+    private var activeSegmentStartedAt: Date?
     /// 已计时但尚未写入模型的秒数；攒满 60 秒或计时停止时统一 flush，
-    /// 避免每秒修改 @Published tasks 导致整个灵动岛视图重建。
+    /// 避免频繁修改 @Published tasks 导致整个灵动岛视图重建。
     private var pendingElapsed: TimeInterval = 0
 
     private func startTimerIfNeeded() {
@@ -269,23 +273,33 @@ final class TaskStore: ObservableObject {
         timer?.invalidate()
         timer = nil
         timerTaskID = nil
+        activeSegmentStartedAt = nil
 
         guard let activeTask = tasks.first(where: { $0.isActive && !$0.isCompleted }) else { return }
         timerTaskID = activeTask.id
+        activeSegmentStartedAt = Date()
 
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
+        // 每分钟把累计时长写入模型；时长按时间戳计算，定时器晚触发/被系统合并都不影响准确性。
+        let newTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self.pendingElapsed += 1
-                if self.pendingElapsed >= 60 {
-                    self.flushPendingElapsed()
-                }
+                self?.flushPendingElapsed()
             }
         }
+        newTimer.tolerance = 10
+        timer = newTimer
+    }
+
+    /// 按时间戳把上一段计时累加进 pendingElapsed。
+    private func accumulateActiveSegment() {
+        guard let startedAt = activeSegmentStartedAt else { return }
+        let now = Date()
+        pendingElapsed += now.timeIntervalSince(startedAt)
+        activeSegmentStartedAt = now
     }
 
     /// 把累计的计时增量写入模型并保存（每分钟一次，或计时停止/切换任务时）。
     private func flushPendingElapsed() {
+        accumulateActiveSegment()
         defer { pendingElapsed = 0 }
         guard pendingElapsed > 0, let id = timerTaskID,
               let index = tasks.firstIndex(where: { $0.id == id }) else { return }

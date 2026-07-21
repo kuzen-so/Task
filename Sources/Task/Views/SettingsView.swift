@@ -12,6 +12,8 @@ struct SettingsView: View {
     @AppStorage("taskCheckboxStyle") private var checkboxStyle: TaskCheckboxStyle = .circle
     @AppStorage("remindersAutoSyncEnabled") private var remindersAutoSyncEnabled: Bool = true
     @AppStorage("remindersSyncIntervalSeconds") private var remindersSyncIntervalSeconds: Double = 60.0
+    @AppStorage("islandTopDockSide") private var islandTopDockSide: String = "center"
+    @AppStorage("islandEventAlertEnabled") private var islandEventAlertEnabled: Bool = true
 
     private var launchToggleBinding: Binding<Bool> {
         Binding(
@@ -61,6 +63,25 @@ struct SettingsView: View {
                         .foregroundColor(.red)
                         .padding(.top, 4)
                 }
+            }
+            .padding(.vertical, 8)
+
+            Section(header: Text("灵动岛").font(.headline)) {
+                Picker("顶部停靠位置", selection: $islandTopDockSide) {
+                    Text("居中").tag("center")
+                    Text("刘海左侧").tag("left")
+                    Text("刘海右侧").tag("right")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: islandTopDockSide) { _ in
+                    NotificationCenter.default.post(name: .islandTopDockSideChanged, object: nil)
+                }
+
+                Toggle("日程临近时发光提醒", isOn: $islandEventAlertEnabled)
+
+                Text("和其他灵动岛软件（如 Vibe Island）同时使用时，可把停靠位置改到刘海一侧避让。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             .padding(.vertical, 8)
 
@@ -199,7 +220,7 @@ struct SettingsView: View {
                 HStack {
                     Text("版本")
                     Spacer()
-                    Text("1.4.0")
+                    Text("1.5.0")
                         .foregroundColor(.secondary)
                 }
             }
