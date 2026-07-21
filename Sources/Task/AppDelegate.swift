@@ -3,8 +3,6 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let celebrationOverlay = CelebrationOverlay()
-
     private let taskStore = TaskStore()
     private let remindersService = RemindersService()
     private let calendarService = CalendarService()
@@ -59,9 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupServiceConnections() {
         taskStore.remindersService = remindersService
-        taskStore.onTaskCompleted = { [weak self] task in
-            self?.showCelebration(for: task)
-        }
+        // 完成任务的反馈由灵动岛左栏舞台区的 Logo 动画承担（v1.8.0 起），
+        // 不再弹出全屏 emoji 庆祝动画。
         calendarService.updateAuthorizationStatus()
         remindersService.prepareAfterLaunch()
     }
@@ -87,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 loaded.size = NSSize(width: 18, height: 18)
                 image = loaded
             } else {
-                image = NSImage(systemSymbolName: "dice.fill", accessibilityDescription: "Task")!
+                image = NSImage(systemSymbolName: "die.face.2.fill", accessibilityDescription: "Task")!
             }
             button.image = image
             button.action = #selector(togglePopover)
@@ -154,14 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: taskStore,
             calendarService: calendarService
         ) { [weak self] task in
-            self?.taskStore.setActive(task)
+            self?.taskStore.toggleActive(task)
         }
-    }
-
-    private func showCelebration(for task: TaskItem) {
-        // 传完整的岛 frame，动画窗口会对齐并盖住整个岛，emoji 从岛中心爆出。
-        guard let islandFrame = FloatingIslandManager.shared.visibleContentFrame else { return }
-        celebrationOverlay.show(covering: islandFrame)
     }
 
     @objc func showSettings() {

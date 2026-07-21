@@ -16,6 +16,8 @@ struct FloatingIslandView: View {
     @State private var calendarDays: [Date] = []
     @State private var selectedDate: Date = Date()
     @State private var stripCenterOffset: Int = 0
+    /// 拖动排序中正在被拖的任务 id（onDrag 同步赋值，dropEntered 里实时换位要用）。
+    @State private var draggingTaskID: UUID?
 
     private var today: Date { Date() }
     private var calendar: Calendar { Calendar.current }
@@ -105,7 +107,7 @@ struct FloatingIslandView: View {
             if let alert = manager.alertEvent {
                 eventPillContent(alert, now: now, accent: .orange)
             } else if let event = nextEvent(at: now) {
-                eventPillContent(event, now: now, accent: Color(red: 0.35, green: 0.65, blue: 1.0))
+                eventPillContent(event, now: now, accent: .blue)
             } else if let active = store.tasks.first(where: { $0.isActive && !$0.isCompleted }) {
                 activeTaskPillContent(active)
             } else {
@@ -154,9 +156,7 @@ struct FloatingIslandView: View {
 
     private func activeTaskPillContent(_ task: TaskItem) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "play.fill")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundColor(.green)
+            ActiveIndicatorBars(color: .green, maxHeight: 9)
 
             Text(task.title)
                 .font(IslandStyles.bodyFont(size: 12, weight: .medium))
@@ -176,9 +176,7 @@ struct FloatingIslandView: View {
 
     private var defaultPillContent: some View {
         HStack(spacing: 5) {
-            Image(systemName: "dice.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white)
+            IslandLogo(size: 13)
 
             Spacer()
 
@@ -196,7 +194,7 @@ struct FloatingIslandView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 expandedHeader
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 16)
                     .padding(.top, 18)
                     .padding(.bottom, 12)
                     .frame(width: Constants.Island.expandedWidth * 0.6)
@@ -211,41 +209,54 @@ struct FloatingIslandView: View {
                 leftBody
                     .frame(width: Constants.Island.expandedWidth * 0.6)
 
+                // 两列之间的竖分隔线，避免任务列表和日历糊在一起。
+                Rectangle()
+                    .fill(IslandStyles.dividerColor)
+                    .frame(width: 1)
+
                 rightBody
-                    .frame(width: Constants.Island.expandedWidth * 0.4)
+                    .frame(width: Constants.Island.expandedWidth * 0.4 - 1)
             }
             .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Left Body (Tasks)
+    // MARK: - Left Body (Stage + Tasks)
 
+    /// 左栏上下分区：上 1/3 是 Logo 动画舞台，下 2/3 是任务列表 + 输入框。
     private var leftBody: some View {
-        VStack(spacing: 0) {
-            taskList
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .frame(maxHeight: .infinity)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                LogoStageView(store: store)
+                    .frame(height: geometry.size.height / 3)
 
-            newTaskArea
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 10)
+                Rectangle()
+                    .fill(IslandStyles.dividerColor)
+                    .frame(height: 1)
+
+                VStack(spacing: 0) {
+                    taskList
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .frame(maxHeight: .infinity)
+
+                    newTaskArea
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .padding(.bottom, 10)
+                }
+                .frame(height: geometry.size.height * 2 / 3 - 1)
+            }
         }
     }
 
     private var expandedHeader: some View {
         HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "dice.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-
-                Text("Task")
-                    .font(IslandStyles.titleFont(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-            }
+            // 图标不再重复：Logo 已在下方舞台区展示，这里只留标题。
+            Text("Task")
+                .font(IslandStyles.titleFont(size: 16, weight: .bold))
+                .foregroundColor(.white)
 
             Spacer()
         }
@@ -268,7 +279,25 @@ struct FloatingIslandView: View {
                                 onDelete: { store.delete(task) }
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
+                            .onDrag {
+                                draggingTaskID = task.id
+                                return NSItemProvider(object: task.id.uuidString as NSString)
+                            }
+                            .onDrop(of: ["public.text"], delegate: TaskReorderDropDelegate(
+                                targetID: task.id,
+                                store: store,
+                                draggingID: $draggingTaskID
+                            ))
                         }
+
+                        // 列表末尾的拖放区：拖到这里实时排到最后。
+                        Color.clear
+                            .frame(height: 20)
+                            .onDrop(of: ["public.text"], delegate: TaskReorderDropDelegate(
+                                targetID: nil,
+                                store: store,
+                                draggingID: $draggingTaskID
+                            ))
                     }
                 }
                 .frame(minHeight: activeTasks.isEmpty ? geometry.size.height : nil, alignment: .top)
@@ -283,7 +312,7 @@ struct FloatingIslandView: View {
 
             VStack(spacing: 10) {
                 Image(systemName: "checklist")
-                    .font(.system(size: 28, weight: .medium))
+                    .font(.system(size: 24, weight: .medium))
                     .foregroundColor(IslandStyles.secondaryText)
 
                 Text("还没有任务")
@@ -324,16 +353,31 @@ struct FloatingIslandView: View {
 
             selectedDateHeader
 
-            eventList
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 16)
-                .frame(maxHeight: .infinity)
-
-            calendarFooter
-                .padding(.horizontal, 16)
-                .padding(.bottom, 14)
+            if calendarService.isAuthorized {
+                eventList
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    .frame(maxHeight: .infinity)
+            } else {
+                calendarUnauthorizedState
+                    .padding(.horizontal, 16)
+                    .frame(maxHeight: .infinity)
+            }
         }
+    }
+
+    private var calendarUnauthorizedState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "calendar.badge.exclamationmark")
+                .font(.system(size: 24))
+                .foregroundColor(IslandStyles.secondaryText)
+
+            Text("点右上角齿轮关联日历")
+                .font(IslandStyles.bodyFont(size: 13, weight: .medium))
+                .foregroundColor(IslandStyles.secondaryText)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var selectedDateHeader: some View {
@@ -354,14 +398,10 @@ struct FloatingIslandView: View {
 
             Spacer()
 
-            if calendar.isDate(selectedDate, inSameDayAs: today) {
-                Text("今天")
-                    .font(IslandStyles.bodyFont(size: 11, weight: .semibold))
-                    .foregroundColor(.blue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.12))
-                    .cornerRadius(4)
+            if calendarService.isAuthorized {
+                Text("\(calendarService.selectedDateEvents.count) 个日程")
+                    .font(IslandStyles.bodyFont(size: 11, weight: .regular))
+                    .foregroundColor(IslandStyles.tertiaryText)
             }
 
             Button(action: { shiftStrip(by: 1) }) {
@@ -412,13 +452,8 @@ struct FloatingIslandView: View {
 
             Button(action: openSettings) {
                 Image(systemName: "gear")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(IslandStyles.secondaryText)
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity(0.06))
-                    .clipShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IslandIconButtonStyle(size: 13))
         }
     }
 
@@ -427,22 +462,6 @@ struct FloatingIslandView: View {
             events: calendarService.selectedDateEvents,
             upcomingEvents: []
         )
-    }
-
-    private var calendarFooter: some View {
-        HStack {
-            Spacer()
-
-            if !calendarService.isAuthorized {
-                Text("点击右上角按钮关联日历")
-                    .font(IslandStyles.bodyFont(size: 11))
-                    .foregroundColor(IslandStyles.tertiaryText)
-            } else {
-                Text("\(calendarService.selectedDateEvents.count) 个日程")
-                    .font(IslandStyles.bodyFont(size: 11))
-                    .foregroundColor(IslandStyles.tertiaryText)
-            }
-        }
     }
 
     // MARK: - Actions
@@ -474,6 +493,35 @@ private struct IslandPulseOverlay: View {
                     glowing = true
                 }
             }
+    }
+}
+
+/// 拖动排序代理：拖拽划过目标行时实时换位（跟手），而不是松手才换。
+/// targetID 为 nil 表示列表末尾的拖放区。
+private struct TaskReorderDropDelegate: DropDelegate {
+    let targetID: UUID?
+    let store: TaskStore
+    @Binding var draggingID: UUID?
+
+    func dropEntered(info: DropInfo) {
+        guard let draggingID = draggingID else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            if let targetID = targetID {
+                guard draggingID != targetID else { return }
+                store.moveTask(withID: draggingID, before: targetID)
+            } else {
+                store.moveTaskToEnd(withID: draggingID)
+            }
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingID = nil
+        return true
     }
 }
 

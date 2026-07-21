@@ -4,12 +4,6 @@ struct EventListView: View {
     let events: [CalendarEvent]
     let upcomingEvents: [CalendarEvent]
 
-    private let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
     var body: some View {
         VStack(spacing: 0) {
             if events.isEmpty {
@@ -20,9 +14,9 @@ struct EventListView: View {
                 }
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         ForEach(events) { event in
-                            eventRow(event)
+                            EventRow(event: event)
                         }
                     }
                     .padding(.vertical, 4)
@@ -41,7 +35,7 @@ struct EventListView: View {
                 .font(IslandStyles.bodyFont(size: 13, weight: .medium))
                 .foregroundColor(IslandStyles.secondaryText)
         }
-        .frame(maxWidth: .infinity, minHeight: 80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var upcomingList: some View {
@@ -52,21 +46,33 @@ struct EventListView: View {
                 .padding(.horizontal, 10)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     ForEach(upcomingEvents.prefix(5)) { event in
-                        eventRow(event)
+                        EventRow(event: event)
                     }
                 }
                 .padding(.vertical, 4)
             }
         }
     }
+}
 
-    private func eventRow(_ event: CalendarEvent) -> some View {
+/// 单条日程：左侧 3px 蓝细条（与任务行左侧语言一致），无卡片底，hover 才出底。
+private struct EventRow: View {
+    let event: CalendarEvent
+    @State private var isHovered = false
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    var body: some View {
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color.orange)
-                .frame(width: 3)
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(Color.blue)
+                .frame(width: 3, height: 28)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(event.title)
@@ -81,12 +87,16 @@ struct EventListView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(isHovered ? Color.white.opacity(0.05) : Color.clear)
         )
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(.easeOut(duration: 0.15), value: isHovered)
     }
 
     private func timeString(for event: CalendarEvent) -> String {
@@ -94,6 +104,6 @@ struct EventListView: View {
             return "全天"
         }
         let dateText = DateFormatter.localizedString(from: event.startDate, dateStyle: .short, timeStyle: .none)
-        return "\(dateText) \(timeFormatter.string(from: event.startDate)) – \(timeFormatter.string(from: event.endDate))"
+        return "\(dateText) \(Self.timeFormatter.string(from: event.startDate)) – \(Self.timeFormatter.string(from: event.endDate))"
     }
 }

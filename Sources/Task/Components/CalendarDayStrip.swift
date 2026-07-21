@@ -47,7 +47,7 @@ struct CalendarDayStrip: View {
 
                 if hasEvents {
                     Circle()
-                        .fill(isToday ? Color.white : Color.orange)
+                        .fill(isToday ? Color.white : Color.blue)
                         .frame(width: 4, height: 4)
                 } else {
                     Color.clear.frame(width: 4, height: 4)

@@ -8,7 +8,7 @@ APP_BUNDLE="${APP_NAME}.app"
 CERT_NAME="Task Dev"
 
 # 营销版本号：发版时手动改这里
-APP_VERSION="1.5.0"
+APP_VERSION="1.9.0"
 # 构建号：自动生成（git commit 数，工作区有未提交改动时追加时间戳），保证每次构建单调递增
 GIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then

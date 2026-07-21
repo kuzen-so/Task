@@ -92,7 +92,7 @@ final class TaskStore: ObservableObject {
         }
 
         tasks.append(task)
-        setActive(task)
+        // 创建 ≠ 马上做：不再自动设为进行中，由用户双击任务手动开始。
         save()
     }
 
@@ -150,6 +150,15 @@ final class TaskStore: ObservableObject {
         save()
     }
 
+    /// 双击切换开始/暂停；暂停时累计时长已通过 startTimerIfNeeded → flush 写回模型。
+    func toggleActive(_ task: TaskItem) {
+        if task.isActive {
+            setActive(nil)
+        } else {
+            setActive(task)
+        }
+    }
+
     func importReminders() {
         guard let service = remindersService, service.isAuthorized else { return }
         Task {
@@ -171,6 +180,27 @@ final class TaskStore: ObservableObject {
                 print("Failed to import reminders: \(error)")
             }
         }
+    }
+
+    // MARK: - Reorder
+
+    /// 拖动排序：把任务移动到目标任务之前。
+    func moveTask(withID id: UUID, before targetID: UUID) {
+        guard id != targetID,
+              let from = tasks.firstIndex(where: { $0.id == id }),
+              tasks.contains(where: { $0.id == targetID }) else { return }
+        let task = tasks.remove(at: from)
+        let insertIndex = tasks.firstIndex(where: { $0.id == targetID }) ?? tasks.count
+        tasks.insert(task, at: insertIndex)
+        save()
+    }
+
+    /// 拖动排序：移动到列表末尾。
+    func moveTaskToEnd(withID id: UUID) {
+        guard let from = tasks.firstIndex(where: { $0.id == id }) else { return }
+        let task = tasks.remove(at: from)
+        tasks.append(task)
+        save()
     }
 
     // MARK: - Reminders Sync

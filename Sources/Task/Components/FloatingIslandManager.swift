@@ -605,11 +605,21 @@ final class FloatingIslandManager: ObservableObject {
 
     /// 鼠标在岛内容区域按下（由 IslandTrackingView 转发）。按下期间暂停悬停展开，
     /// 移动超过 dragThreshold 才判定为拖拽，不影响正常点击。
+    /// 展开状态下只有顶部标题栏可拖动岛：任务列表区域要留给行的拖动排序手势，
+    /// 否则两个拖拽同时抢手势。
     func islandMouseDown(at mouse: NSPoint) {
         // 窗口恒为展开大小，只有按在可见内容（胶囊/展开面板）上才允许拖拽，
         // 否则透明区域的点击会意外把岛拖走。
         guard let window = floatingWindow,
               currentContentFrame(in: window).insetBy(dx: -4, dy: -4).contains(mouse) else { return }
+        if isExpanded {
+            let content = currentContentFrame(in: window)
+            let header = NSRect(x: content.minX,
+                                y: content.maxY - Constants.Island.headerHeight,
+                                width: content.width,
+                                height: Constants.Island.headerHeight)
+            guard header.contains(mouse) else { return }
+        }
         isMouseDownOnIsland = true
         dragStartMouse = mouse
         let pill = currentPillFrame(in: window)

@@ -33,13 +33,17 @@ struct IslandTaskRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .onTapGesture {
+            .onTapGesture(count: 2) {
                 if !task.isCompleted {
                     onActivate()
                 }
             }
+            .help("双击开始/暂停此任务")
 
             HStack(spacing: 6) {
+                if isActive {
+                    ActiveIndicatorBars()
+                }
                 if isActive && highlightStyle == .rightTag {
                     Text("进行中")
                         .font(IslandStyles.bodyFont(size: 10, weight: .medium))
