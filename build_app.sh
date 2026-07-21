@@ -8,7 +8,7 @@ APP_BUNDLE="${APP_NAME}.app"
 CERT_NAME="Task Dev"
 
 # 营销版本号：发版时手动改这里
-APP_VERSION="1.3.1"
+APP_VERSION="1.4.0"
 # 构建号：自动生成（git commit 数，工作区有未提交改动时追加时间戳），保证每次构建单调递增
 GIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
@@ -58,8 +58,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <true/>
     <key>NSCalendarsUsageDescription</key>
     <string>Task 需要访问日历，以便在灵动岛显示日程和重复事件。拒绝时仍可本地使用任务功能。</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Task 需要控制「提醒事项」App，以便将本地任务同步到系统提醒事项。拒绝时仍可本地使用任务功能。</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Task 需要访问提醒事项，以便将本地任务同步到系统提醒事项。拒绝时仍可本地使用任务功能。</string>
 </dict>
 </plist>
 EOF

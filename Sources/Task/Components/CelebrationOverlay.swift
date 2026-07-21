@@ -83,55 +83,108 @@ private final class CelebrationView: NSView {
         emitterLayer.emitterPosition = emitterPoint
         emitterLayer.emitterShape = .point
 
-        let cells = Constants.celebrationEmojis.compactMap { emoji -> CAEmitterCell? in
-            guard let image = renderEmoji(emoji, size: 28) else { return nil }
+        var cells: [CAEmitterCell] = []
+
+        // 第一层：快速闪点——小而亮，一闪而过，制造“绽开”的瞬间感。
+        for color in [NSColor.white, Self.palette[0]] {
+            guard let image = renderCircle(color: color, diameter: 3) else { continue }
             let cell = CAEmitterCell()
             cell.contents = image
-            cell.birthRate = 10
-            cell.lifetime = 2.0
+            cell.birthRate = 8
+            cell.lifetime = 0.7
+            cell.lifetimeRange = 0.2
+            cell.scale = 1.0
+            cell.scaleRange = 0.3
+            cell.scaleSpeed = -0.5
+            cell.velocity = 300
+            cell.velocityRange = 100
+            cell.yAcceleration = -500
+            cell.emissionLongitude = .pi / 2
+            cell.emissionRange = .pi
+            cell.alphaSpeed = -1.4
+            cells.append(cell)
+        }
+
+        // 第二层：彩色圆点——主体礼花，抛起后缓缓落下。
+        for color in Self.palette {
+            guard let image = renderCircle(color: color, diameter: 6) else { continue }
+            let cell = CAEmitterCell()
+            cell.contents = image
+            cell.birthRate = 4
+            cell.lifetime = 1.6
+            cell.lifetimeRange = 0.5
+            cell.scale = 1.0
+            cell.scaleRange = 0.4
+            cell.scaleSpeed = -0.35
+            cell.velocity = 200
+            cell.velocityRange = 90
+            cell.yAcceleration = -420
+            cell.emissionLongitude = .pi / 2
+            cell.emissionRange = .pi
+            cell.alphaSpeed = -0.6
+            cells.append(cell)
+        }
+
+        // 第三层：小纸屑——带旋转的长条，增加质感，落得最慢。
+        for color in [Self.palette[0], Self.palette[2], Self.palette[3]] {
+            guard let image = renderConfetti(color: color) else { continue }
+            let cell = CAEmitterCell()
+            cell.contents = image
+            cell.birthRate = 3
+            cell.lifetime = 1.8
             cell.lifetimeRange = 0.4
             cell.scale = 1.0
             cell.scaleRange = 0.3
-            cell.scaleSpeed = -0.2
-            cell.velocity = 170
-            cell.velocityRange = 90
-            cell.yAcceleration = -360
+            cell.scaleSpeed = -0.3
+            cell.velocity = 130
+            cell.velocityRange = 60
+            cell.yAcceleration = -180
             cell.emissionLongitude = .pi / 2
             cell.emissionRange = .pi
-            cell.spin = 2
-            cell.spinRange = 4
+            cell.spin = 3
+            cell.spinRange = 3
             cell.alphaSpeed = -0.5
-            return cell
+            cells.append(cell)
         }
 
         emitterLayer.emitterCells = cells
         layer.addSublayer(emitterLayer)
 
-        // 0.25 秒后停止生成新粒子，形成一次性"爆出"效果；已生成的继续抛落直到淡出。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        // 0.2 秒后停止生成新粒子，形成一次性"爆出"效果；已生成的继续抛落直到淡出。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.emitterLayer.birthRate = 0
         }
     }
 
-    private func renderEmoji(_ emoji: String, size: CGFloat) -> CGImage? {
-        let nsImage = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            let attributedString = NSAttributedString(
-                string: emoji,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: size * 0.8),
-                    .foregroundColor: NSColor.white
-                ]
-            )
-            let textSize = attributedString.size()
-            let point = NSPoint(
-                x: (rect.width - textSize.width) / 2,
-                y: (rect.height - textSize.height) / 2
-            )
-            attributedString.draw(at: point)
+    /// 克制的礼花配色：金 / 橙 / 淡蓝 / 粉 / 紫 / 白。
+    private static let palette: [NSColor] = [
+        NSColor(red: 1.00, green: 0.84, blue: 0.04, alpha: 1),
+        NSColor(red: 1.00, green: 0.62, blue: 0.04, alpha: 1),
+        NSColor(red: 0.39, green: 0.82, blue: 1.00, alpha: 1),
+        NSColor(red: 1.00, green: 0.39, blue: 0.51, alpha: 1),
+        NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1),
+        .white
+    ]
+
+    private func renderCircle(color: NSColor, diameter: CGFloat) -> CGImage? {
+        let size = NSSize(width: diameter, height: diameter)
+        let nsImage = NSImage(size: size, flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(ovalIn: rect).fill()
             return true
         }
+        var rect = NSRect(origin: .zero, size: size)
+        return nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
 
-        var rect = NSRect(origin: .zero, size: nsImage.size)
+    private func renderConfetti(color: NSColor) -> CGImage? {
+        let size = NSSize(width: 4, height: 7)
+        let nsImage = NSImage(size: size, flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+            return true
+        }
+        var rect = NSRect(origin: .zero, size: size)
         return nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 }

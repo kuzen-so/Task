@@ -5,8 +5,6 @@ enum Constants {
     static let tasksFileName = "tasks.json"
     static let saveDebounceInterval: TimeInterval = 0.3
 
-    static let celebrationEmojis = ["🍕", "🌮", "🍔", "🍩", "🍜", "🍣", "🥐", "🥞"]
-
     static let statusBarPopoverWidth: CGFloat = 300
     static let statusBarPopoverHeight: CGFloat = 420
 

@@ -179,17 +179,27 @@ struct SettingsView: View {
                 }
                 .disabled(!remindersService.isAuthorized)
 
-                Text("权限在「系统设置 → 隐私与安全性 → 自动化」中管理。")
+                Text("权限在「系统设置 → 隐私与安全性 → 提醒事项」中管理。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             .padding(.vertical, 8)
+            .onAppear {
+                if !remindersService.isAuthorized {
+                    Task { @MainActor in
+                        let granted = await remindersService.requestAccess()
+                        if granted {
+                            taskStore.syncReminders()
+                        }
+                    }
+                }
+            }
 
             Section(header: Text("关于").font(.headline)) {
                 HStack {
                     Text("版本")
                     Spacer()
-                    Text("1.2.0")
+                    Text("1.4.0")
                         .foregroundColor(.secondary)
                 }
             }
@@ -205,20 +215,22 @@ struct SettingsView: View {
             .padding(.vertical, 8)
         }
         .padding()
-        .frame(width: 340, height: 620)
+        .frame(width: 340)
     }
 
     private func showAuthDeniedAlert(for appName: String) {
         let alert = NSAlert()
-        alert.messageText = "未获得自动化权限"
-        alert.informativeText = "需要到系统设置 → 隐私与安全性 → 自动化 中允许 Task 控制「\(appName)」。"
+        alert.messageText = "未获得访问权限"
+        alert.informativeText = "需要到系统设置 → 隐私与安全性 → \(appName) 中允许 Task 访问。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "去设置")
         alert.addButton(withTitle: "取消")
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
+            let pane = appName == "提醒事项" ? "Privacy_Reminders" : "Privacy_Calendars"
             let urls = [
+                URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)"),
                 URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"),
                 URL(string: "x-apple.systempreferences:com.apple.Settings.PrivacySecurity.extension"),
                 URL(string: "x-apple.systempreferences:com.apple.preference.security")
