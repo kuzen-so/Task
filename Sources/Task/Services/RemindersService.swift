@@ -9,11 +9,24 @@ import EventKit
 final class RemindersService: ObservableObject {
     @Published private(set) var isAuthorized = false
 
+    /// EventKit 数据库变化（含 iCloud 从其他设备同步进来的变更）时回调，
+    /// 由 TaskStore 订阅做即时同步，替代高频轮询。
+    var onStoreChanged: (() -> Void)?
+
     private let eventStore = EKEventStore()
 
     init() {
         // 只读取本地权限状态，不触碰 Reminders.app。
         updateAuthorizationStatus()
+        NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: eventStore,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.onStoreChanged?()
+            }
+        }
     }
 
     /// 应用启动完成后调用。EventKit 查询权限不依赖 Reminders.app，

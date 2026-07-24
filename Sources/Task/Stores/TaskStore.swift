@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 @preconcurrency import Combine
 
 @MainActor
@@ -15,6 +16,8 @@ final class TaskStore: ObservableObject {
     private var remindersSyncTimer: DispatchSourceTimer?
     private var remindersServiceCancellable: AnyCancellable?
     private var isSyncingReminders = false
+    /// 外部变更触发的同步做 1 秒防抖：一次 iCloud 同步常连发多条变更通知。
+    private var externalSyncWorkItem: DispatchWorkItem?
 
     var remindersService: RemindersService? {
         didSet {
@@ -30,6 +33,11 @@ final class TaskStore: ObservableObject {
                             self?.syncReminders()
                         }
                     }
+                // EventKit 数据库一变（含其他设备经 iCloud 同步进来的）就即时同步，
+                // 轮询定时器只作兜底。
+                service.onStoreChanged = { [weak self] in
+                    self?.scheduleExternalStoreSync()
+                }
             }
 
             updateRemindersSyncTimer()
@@ -47,7 +55,10 @@ final class TaskStore: ObservableObject {
     private func registerDefaultSettings() {
         UserDefaults.standard.register(defaults: [
             "remindersAutoSyncEnabled": true,
-            "remindersSyncIntervalSeconds": 60.0,
+            // 兜底轮询间隔：即时同步由 EKEventStoreChanged 通知承担，这里只防丢通知。
+            "remindersSyncIntervalSeconds": 900.0,
+            Constants.soundEffectsEnabledKey: true,
+            "showTaskCountHeader": true,
             Constants.Island.eventAlertEnabledDefaultsKey: true,
             Constants.Island.topDockSideDefaultsKey: "center"
         ])
@@ -58,6 +69,14 @@ final class TaskStore: ObservableObject {
             remindersSyncTimer?.cancel()
             remindersServiceCancellable?.cancel()
         }
+    }
+
+    // MARK: - Sound
+
+    /// 只在用户主动操作时播放（同步/导入路径不经过这里）。
+    private func playSound(named name: String) {
+        guard UserDefaults.standard.bool(forKey: Constants.soundEffectsEnabledKey) else { return }
+        NSSound(named: NSSound.Name(name))?.play()
     }
 
     // MARK: - CRUD
@@ -93,6 +112,7 @@ final class TaskStore: ObservableObject {
 
         tasks.append(task)
         // 创建 ≠ 马上做：不再自动设为进行中，由用户双击任务手动开始。
+        playSound(named: Constants.Sounds.add)
         save()
     }
 
@@ -115,6 +135,7 @@ final class TaskStore: ObservableObject {
         }
 
         onTaskCompleted?(tasks[index])
+        playSound(named: Constants.Sounds.complete)
         save()
         startTimerIfNeeded()
     }
@@ -138,6 +159,7 @@ final class TaskStore: ObservableObject {
         }
 
         tasks.removeAll { $0.id == task.id }
+        playSound(named: Constants.Sounds.delete)
         save()
         startTimerIfNeeded()
     }
@@ -216,7 +238,7 @@ final class TaskStore: ObservableObject {
         guard isEnabled else { return }
 
         let interval = UserDefaults.standard.double(forKey: "remindersSyncIntervalSeconds")
-        let effectiveInterval = interval > 0 ? interval : 60.0
+        let effectiveInterval = interval > 0 ? interval : 900.0
 
         let newTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
         newTimer.schedule(deadline: .now() + effectiveInterval, repeating: effectiveInterval)
@@ -227,6 +249,16 @@ final class TaskStore: ObservableObject {
         }
         newTimer.activate()
         remindersSyncTimer = newTimer
+    }
+
+    /// EventKit 变更通知触发：防抖后走常规 syncReminders。
+    private func scheduleExternalStoreSync() {
+        externalSyncWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.syncReminders()
+        }
+        externalSyncWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
     }
 
     func syncReminders() {

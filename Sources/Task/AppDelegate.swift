@@ -161,23 +161,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 340, height: 560),
-                styleMask: [.titled, .closable, .resizable],
+                contentRect: NSRect(x: 0, y: 0, width: 440, height: 660),
+                styleMask: [.titled, .closable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "Task 设置"
             window.isReleasedWhenClosed = false
-            window.level = .popUpMenu
             window.center()
             window.contentViewController = NSHostingController(rootView: SettingsView(
                 taskStore: taskStore,
                 remindersService: remindersService,
                 calendarService: calendarService
             ))
+            // contentViewController 赋值后窗口会被内容理想尺寸顶掉，重新锁定。
+            window.setContentSize(NSSize(width: 440, height: 660))
             settingsWindow = window
         }
 
+        // 每次打开都回屏幕居中，位置可预期。
+        settingsWindow?.center()
         settingsWindow?.makeKeyAndOrderFront(nil)
         settingsWindow?.orderFrontRegardless()
     }

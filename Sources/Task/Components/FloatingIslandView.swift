@@ -13,11 +13,19 @@ struct FloatingIslandView: View {
     var onRequestFocus: (() -> Void)?
 
     @State private var newTaskTitle: String = ""
+    @AppStorage("showTaskCountHeader") private var showTaskCountHeader: Bool = true
+    @AppStorage("islandFreeMoveEnabled") private var islandFreeMoveEnabled: Bool = true
+    @AppStorage("islandAlwaysSnapEnabled") private var islandAlwaysSnapEnabled: Bool = false
     @State private var calendarDays: [Date] = []
     @State private var selectedDate: Date = Date()
     @State private var stripCenterOffset: Int = 0
     /// 拖动排序中正在被拖的任务 id（onDrag 同步赋值，dropEntered 里实时换位要用）。
     @State private var draggingTaskID: UUID?
+    /// 水滴吸附形变：飞行拉长 → 触水压扁 → 果冻回弹。jellyArmed 标记本次飞行以触水收尾，
+    /// snapFlying 回落时不再重复复位形变。
+    @State private var jellyX: CGFloat = 1
+    @State private var jellyY: CGFloat = 1
+    @State private var jellyArmed = false
 
     private var today: Date { Date() }
     private var calendar: Calendar { Calendar.current }
@@ -47,32 +55,57 @@ struct FloatingIslandView: View {
 
     var body: some View {
         ZStack {
-            Color.black
-                .clipShape(islandShape)
+            // 岛体投影：同一个圆角矩形「填充+模糊+偏移」垫在内容底下。
+            // 必须放在 ZStack 内、.animation 之前——和内容同一个动画事务，
+            // 否则投影不跟弹簧动画，展开时会岔成两个时间线。
+            islandShape
+                .fill(Color.black.opacity(Constants.Island.Shadow.bodyAmbientOpacity))
+                .blur(radius: Constants.Island.Shadow.bodyAmbientRadius)
+                .offset(y: Constants.Island.Shadow.bodyAmbientYOffset)
+            islandShape
+                .fill(Color.black.opacity(Constants.Island.Shadow.bodyTightOpacity))
+                .blur(radius: Constants.Island.Shadow.bodyTightRadius)
+                .offset(y: Constants.Island.Shadow.bodyTightYOffset)
 
-            if manager.isExpanded {
-                expandedContent
-                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-            } else {
-                collapsedContent
-                    .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+            ZStack {
+                Color.black
+
+                if manager.isExpanded {
+                    expandedContent
+                        // 展开：等面板弹到 ~60% 再淡入内容，避免小胶囊里就挤出信息；
+                        // 收起：内容快速淡出，不跟着面板一起被挤扁。
+                        .transition(.asymmetric(
+                            insertion: .opacity.animation(.easeIn(duration: 0.18).delay(0.24)),
+                            removal: .opacity.animation(.easeOut(duration: 0.12))
+                        ))
+                } else {
+                    collapsedContent
+                        // 同理：收回到胶囊大小附近再显示胶囊内容，展开时立刻让位。
+                        .transition(.asymmetric(
+                            insertion: .opacity.animation(.easeIn(duration: 0.15).delay(0.28)),
+                            removal: .opacity.animation(.easeOut(duration: 0.10))
+                        ))
+                }
+            }
+            .clipShape(islandShape)
+            .overlay {
+                // 日程临近提醒：胶囊发光脉冲（不展开、不抢焦点），悬停展开即已读。
+                if manager.alertEvent != nil && !manager.isExpanded {
+                    IslandPulseOverlay(cornerRadius: Constants.Island.collapsedBottomCornerRadius)
+                }
             }
         }
         .frame(
             width: manager.isExpanded ? Constants.Island.expandedWidth : Constants.Island.collapsedWidth,
             height: manager.isExpanded ? manager.expandedHeight : Constants.Island.collapsedHeight
         )
+        // 水滴吸附形变：锚点钉在接触面（吸顶时钉住顶边），只影响收起态胶囊的视觉。
+        .scaleEffect(x: jellyX, y: jellyY, anchor: manager.contentAtBottom ? .bottom : .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.8), value: manager.isExpanded)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: manager.expandedHeight)
-        .clipShape(islandShape)
-        .overlay {
-            // 日程临近提醒：胶囊发光脉冲（不展开、不抢焦点），悬停展开即已读。
-            if manager.alertEvent != nil && !manager.isExpanded {
-                IslandPulseOverlay(cornerRadius: Constants.Island.collapsedBottomCornerRadius)
-            }
-        }
-        // 窗口恒为展开大小，内容按吸附边对齐：顶部向下展开，底部/低悬浮向上展开，左右吸附从边缘向内展开
+        // 窗口恒为「展开大小+投影边距」，内容按吸附边对齐后再四边内缩，留出投影渲染空间
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: contentAlignment)
+        .padding(Constants.Island.shadowPadding)
         .ignoresSafeArea()
         .onAppear {
             stripCenterOffset = 0
@@ -91,6 +124,24 @@ struct FloatingIslandView: View {
                 newTaskTitle = ""
                 selectedDate = today
             }
+        }
+        .onChange(of: manager.snapFlying) { flying in
+            if flying {
+                // 飞行中：沿运动方向拉长，像水滴被水面吸住
+                withAnimation(.easeIn(duration: 0.28)) { jellyX = 0.94; jellyY = 1.18 }
+            } else if jellyArmed {
+                // 本次飞行以触水收尾，形变由 jellyImpact 的回弹负责复位
+                jellyArmed = false
+            } else {
+                // 飞行中断（还没触水又开拖）：直接回原形
+                withAnimation(.easeOut(duration: 0.15)) { jellyX = 1; jellyY = 1 }
+            }
+        }
+        .onChange(of: manager.jellyImpact) { _ in
+            jellyArmed = true
+            // 触水瞬间压扁，再果冻回弹
+            withAnimation(.easeOut(duration: 0.07)) { jellyX = 1.22; jellyY = 0.78 }
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.35).delay(0.07)) { jellyX = 1; jellyY = 1 }
         }
         .onChange(of: selectedDate) { newDate in
             calendarService.refreshAll(centeredOn: newDate)
@@ -155,20 +206,23 @@ struct FloatingIslandView: View {
     }
 
     private func activeTaskPillContent(_ task: TaskItem) -> some View {
-        HStack(spacing: 6) {
-            ActiveIndicatorBars(color: .green, maxHeight: 9)
-
-            Text(task.title)
+        ZStack {
+            // 不显示任务名：标题太长会顶爆胶囊布局，固定显示「工作中」，居中。
+            Text("工作中")
                 .font(IslandStyles.bodyFont(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.85))
                 .lineLimit(1)
-                .truncationMode(.tail)
+                .fixedSize()
 
-            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                ActivePillLogo()
 
-            Text("\(store.activeTasks.count)")
-                .font(IslandStyles.bodyFont(size: 13, weight: .semibold))
-                .foregroundColor(IslandStyles.secondaryText)
+                Spacer(minLength: 0)
+
+                Text("\(store.activeTasks.count)")
+                    .font(IslandStyles.bodyFont(size: 13, weight: .semibold))
+                    .foregroundColor(IslandStyles.secondaryText)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 12)
@@ -176,7 +230,7 @@ struct FloatingIslandView: View {
 
     private var defaultPillContent: some View {
         HStack(spacing: 5) {
-            IslandLogo(size: 13)
+            PillLogo()
 
             Spacer()
 
@@ -191,35 +245,34 @@ struct FloatingIslandView: View {
     // MARK: - Expanded
 
     private var expandedContent: some View {
-        VStack(spacing: 0) {
+        let contentWidth = Constants.Island.expandedContentWidth
+        return VStack(spacing: 0) {
             HStack(spacing: 0) {
                 expandedHeader
                     .padding(.horizontal, 16)
                     .padding(.top, 18)
                     .padding(.bottom, 12)
-                    .frame(width: Constants.Island.expandedWidth * 0.6)
+                    .frame(width: contentWidth * 0.6)
                 calendarHeader
                     .padding(.horizontal, 16)
                     .padding(.top, 18)
                     .padding(.bottom, 12)
-                    .frame(width: Constants.Island.expandedWidth * 0.4)
+                    .frame(width: contentWidth * 0.4)
             }
 
             HStack(spacing: 0) {
                 leftBody
-                    .frame(width: Constants.Island.expandedWidth * 0.6)
-
-                // 两列之间的竖分隔线，避免任务列表和日历糊在一起。
-                Rectangle()
-                    .fill(IslandStyles.dividerColor)
-                    .frame(width: 1)
+                    .frame(width: contentWidth * 0.6)
 
                 rightBody
-                    .frame(width: Constants.Island.expandedWidth * 0.4 - 1)
+                    .frame(width: contentWidth * 0.4)
             }
             .frame(maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 比面板窄一点并在面板内居中，两侧/底部留出呼吸空间
+        .padding(.bottom, 12)
+        .frame(width: contentWidth)
+        .frame(maxHeight: .infinity)
     }
 
     // MARK: - Left Body (Stage + Tasks)
@@ -230,10 +283,6 @@ struct FloatingIslandView: View {
             VStack(spacing: 0) {
                 LogoStageView(store: store)
                     .frame(height: geometry.size.height / 3)
-
-                Rectangle()
-                    .fill(IslandStyles.dividerColor)
-                    .frame(height: 1)
 
                 VStack(spacing: 0) {
                     taskList
@@ -246,17 +295,21 @@ struct FloatingIslandView: View {
                         .padding(.top, 10)
                         .padding(.bottom, 10)
                 }
-                .frame(height: geometry.size.height * 2 / 3 - 1)
+                .frame(height: geometry.size.height * 2 / 3)
             }
         }
     }
 
     private var expandedHeader: some View {
         HStack {
-            // 图标不再重复：Logo 已在下方舞台区展示，这里只留标题。
-            Text("Task")
-                .font(IslandStyles.titleFont(size: 16, weight: .bold))
-                .foregroundColor(.white)
+            if showTaskCountHeader {
+                // 标题直接给信息量：剩余待办数。文字压暗，数字用蓝色保持醒目。
+                (Text("当前待办事项还剩 ")
+                    + Text("\(store.activeTasks.count)").foregroundColor(.blue)
+                    + Text(" 条"))
+                    .font(IslandStyles.titleFont(size: 16, weight: .bold))
+                    .foregroundColor(.white.opacity(0.55))
+            }
 
             Spacer()
         }
@@ -427,11 +480,16 @@ struct FloatingIslandView: View {
         calendarService.refreshAll(centeredOn: selectedDate)
     }
 
-    private func dateTitle(for date: Date) -> String {
+    /// 每次 body 重绘都 new DateFormatter 太贵，静态缓存一个。
+    private static let dateTitleFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "M月d日 EEEE"
         formatter.locale = Locale(identifier: "zh_CN")
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    private func dateTitle(for date: Date) -> String {
+        Self.dateTitleFormatter.string(from: date)
     }
 
     private var calendarDayStrip: some View {
@@ -447,8 +505,30 @@ struct FloatingIslandView: View {
     }
 
     private var calendarHeader: some View {
-        HStack {
+        HStack(spacing: 8) {
             Spacer()
+
+            // 自由移动（漂浮岛）快捷开关：开着可拖拽，关掉锁死。锁定时橙色提醒。
+            Button { islandFreeMoveEnabled.toggle() } label: {
+                Image(systemName: islandFreeMoveEnabled ? "lock.open" : "lock.fill")
+            }
+            .buttonStyle(IslandIconButtonStyle(
+                color: islandFreeMoveEnabled ? IslandStyles.secondaryText : .orange,
+                size: 13
+            ))
+            .help(islandFreeMoveEnabled ? "自由移动已开启，点击锁定岛" : "岛已锁定，点击解锁")
+
+            // 吸附岛快捷开关：开着拖拽松手必吸顶部。蓝色=已开启。
+            Button { islandAlwaysSnapEnabled.toggle() } label: {
+                Image(systemName: "arrow.up.to.line")
+            }
+            .buttonStyle(IslandIconButtonStyle(
+                color: islandAlwaysSnapEnabled ? .blue : IslandStyles.secondaryText,
+                size: 13
+            ))
+            .help("总是吸附到顶部")
+            .disabled(!islandFreeMoveEnabled)
+            .opacity(islandFreeMoveEnabled ? 1 : 0.35)
 
             Button(action: openSettings) {
                 Image(systemName: "gear")
@@ -478,6 +558,55 @@ struct FloatingIslandView: View {
 }
 
 // MARK: - AnyShape Helper
+
+/// 进行中任务的胶囊图标：小方块白脸持续左右摇摆（替代原来的绿色律动条）。
+private struct ActivePillLogo: View {
+    @State private var swaying = false
+
+    var body: some View {
+        IslandLogo(size: 13)
+            .rotationEffect(.degrees(swaying ? 12 : -12))
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
+                    swaying = true
+                }
+            }
+    }
+}
+
+/// 胶囊左边的小 Logo：收起（从大变回小）插入时「睁大」两下打招呼。
+/// 注意：这个 Logo 只在没有计时任务时才会出现在胶囊上（计时中显示摇摆图标 + 任务名），
+/// 所以出现即「没任务」，固定眨眼，不用再判断任务数。
+private struct PillLogo: View {
+    /// 没任务时的「睁大」：小尺寸下眨眼/压扁都看不出来，直接整体放大再缩回。
+    @State private var widened = false
+
+    var body: some View {
+        IslandLogo(size: 13)
+            .scaleEffect(widened ? 1.45 : 1.0)
+            .onAppear {
+                // 胶囊内容淡入有 ~0.28s 延迟，等显现后再开始；
+                // 且 onAppear 里立刻 withAnimation 不生效，要延迟一拍。
+                blink(times: 2, after: 0.4)
+            }
+    }
+
+    private func blink(times: Int, after initialDelay: Double) {
+        for index in 0..<times {
+            let at = initialDelay + Double(index) * 0.4
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
+                    widened = true
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + at + 0.22) {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                    widened = false
+                }
+            }
+        }
+    }
+}
 
 /// 日程提醒的呼吸光圈（macOS 13 兼容的 repeatForever 动画）。
 private struct IslandPulseOverlay: View {

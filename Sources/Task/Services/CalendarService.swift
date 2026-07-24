@@ -19,6 +19,10 @@ final class CalendarService: ObservableObject {
     /// 保证同时只有一个刷新任务在执行。
     private var fetchTask: Task<Void, Never>?
     private var pendingRequest: RefreshRequest?
+    /// 最近一次刷新的选中日期，EventKit 变更通知触发刷新时沿用。
+    private var lastSelectedDate: Date = Date()
+    /// EventKit 变更通知的防抖（一次 iCloud 同步常连发多条通知）。
+    private var storeChangeWorkItem: DispatchWorkItem?
 
     private struct RefreshRequest {
         let selectedDate: Date
@@ -31,6 +35,27 @@ final class CalendarService: ObservableObject {
             hiddenCalendarNames = Set(hidden)
         }
         updateAuthorizationStatus()
+        // 日历数据库一变（含其他设备经 iCloud 同步进来的）就即时刷新，
+        // FloatingIslandManager 的周期静默刷新只作兜底。
+        NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: eventStore,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleStoreChangeRefresh()
+            }
+        }
+    }
+
+    private func scheduleStoreChangeRefresh() {
+        storeChangeWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isAuthorized else { return }
+            self.refreshAll(centeredOn: self.lastSelectedDate)
+        }
+        storeChangeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
     }
 
     // MARK: - Authorization
@@ -91,6 +116,7 @@ final class CalendarService: ObservableObject {
 
     /// 一次性刷新所有日历数据。内部会串行执行，避免并发刷新。
     func refreshAll(centeredOn selectedDate: Date, stripDays: Int = 5, upcomingDays: Int = 14) {
+        lastSelectedDate = selectedDate
         guard isAuthorized else {
             todayEvents = []
             selectedDateEvents = []
@@ -235,6 +261,7 @@ final class CalendarService: ObservableObject {
     // MARK: - Helpers
 
     private nonisolated static func log(_ message: String) {
+        #if DEBUG
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "[\(timestamp)] \(message)\n"
         print(line, terminator: "")
@@ -254,5 +281,6 @@ final class CalendarService: ObservableObject {
                 try? data.write(to: url)
             }
         }
+        #endif
     }
 }
