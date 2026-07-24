@@ -110,20 +110,21 @@ final class FloatingIslandManager: ObservableObject {
     @objc private func handleDefaultsChange() {
         let on = UserDefaults.standard.bool(forKey: Constants.Island.alwaysSnapEnabledDefaultsKey)
         defer { lastSnapEnabled = on }
-        guard on, !lastSnapEnabled else { return }
+        guard on != lastSnapEnabled else { return }
+        if !on {
+            pendingSnapOnExit = false
+            return
+        }
         if isExpanded {
-            // 先收起成胶囊再吸附；收起期间暂停悬停展开，直到鼠标离开岛区域。
-            suppressHoverUntilExit = true
-            collapse()
-            DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
-                guard let self = self, !self.isDragging,
-                      UserDefaults.standard.bool(forKey: Constants.Island.alwaysSnapEnabledDefaultsKey) else { return }
-                self.snapToTopEdge(animated: true)
-            }
+            // 不马上收起：挂起，等鼠标离开岛区域后再收起+吸附（见 performHoverCheck）。
+            pendingSnapOnExit = true
         } else {
             snapToTopEdge(animated: true)
         }
     }
+
+    /// 磁铁打开时岛正处于展开态：挂起，等鼠标离开后再收起+吸附。
+    private var pendingSnapOnExit = false
 
     /// 立刻吸附到顶部（磁铁刚打开 / 启动校正时用），保持当前水平位置。
     private func snapToTopEdge(animated: Bool) {
@@ -185,6 +186,20 @@ final class FloatingIslandManager: ObservableObject {
         // 只检测实际内容区域，加一点边距避免边缘过于敏感。
         let checkFrame = currentContentFrame(in: window).insetBy(dx: -4, dy: -4)
         let inContent = checkFrame.contains(mouseLoc)
+
+        // 磁铁刚打开时岛是展开的：等鼠标真正离开后再收起+吸附。
+        if pendingSnapOnExit, !inContent {
+            pendingSnapOnExit = false
+            if isExpanded {
+                collapse()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Constants.Island.animationDuration + 0.05) { [weak self] in
+                guard let self = self, !self.isDragging,
+                      UserDefaults.standard.bool(forKey: Constants.Island.alwaysSnapEnabledDefaultsKey) else { return }
+                self.snapToTopEdge(animated: true)
+            }
+            return
+        }
 
         if suppressHoverUntilExit {
             if !inContent { suppressHoverUntilExit = false }
@@ -740,6 +755,7 @@ final class FloatingIslandManager: ObservableObject {
     private func beginDrag() {
         cancelPendingCollapse()
         cancelDropletSnap()
+        pendingSnapOnExit = false
         isDragging = true
         // 拖拽即脱离吸附，回到自由悬浮对齐；展开状态下先收起成胶囊跟着鼠标走。
         dockEdges = []
